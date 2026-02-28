@@ -18,7 +18,9 @@ CACHE_DIR = "/root/cache"
 
 cf_account_id = "b8a6047310bbd4b0a0e5374e91089308"
 
-r2_secret = modal.Secret.from_name("cf-access-key", required_keys=["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"])
+r2_secret = modal.Secret.from_name(
+    "cf-access-key", required_keys=["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
+)
 R2_MOUNT_PATH = "/root/r2"
 
 
@@ -27,12 +29,14 @@ R2_MOUNT_PATH = "/root/r2"
     gpu="H100",
     scaledown_window=300,
     # Mount the volume to persist the model weights
-    volumes={CACHE_DIR: cache_volume, 
-             R2_MOUNT_PATH: modal.CloudBucketMount(
-                    bucket_name="learnscrolling-assets",
-                    bucket_endpoint_url=f"https://{cf_account_id}.r2.cloudflarestorage.com",
-                    secret=r2_secret
-                 )},
+    volumes={
+        CACHE_DIR: cache_volume,
+        R2_MOUNT_PATH: modal.CloudBucketMount(
+            bucket_name="learnscrolling-assets",
+            bucket_endpoint_url=f"https://{cf_account_id}.r2.cloudflarestorage.com",
+            secret=r2_secret,
+        ),
+    },
     # Requires a Modal Secret named 'huggingface-secret' with HF_TOKEN key
     enable_memory_snapshot=True,
     secrets=[modal.Secret.from_name("huggingface-secret")],
@@ -60,7 +64,9 @@ class PeterGriffinTTS:
         import subprocess
         import tempfile
         import torchaudio
+        import shutil
         from pathlib import Path
+        print("Hello generate")
 
         logging.info(
             json.dumps(
@@ -74,41 +80,56 @@ class PeterGriffinTTS:
         )
 
         # Generate the audio using Peter Griffin's voice as the prompt
-        wav = self.model.generate(text, 
-                                  audio_prompt_path=self.audio_prompt_path, 
-                                  exaggeration=0.7)
+        wav = self.model.generate(
+            text, audio_prompt_path=self.audio_prompt_path, exaggeration=0.7
+        )
 
         wav = wav.cpu()
 
         if wav.dim() == 1:
             wav = wav.unsqueeze(0)
 
-        # Speed up 1.5x without pitch shift using ffmpeg (sox_effects removed in torchaudio 2.1+)
-        with tempfile.NamedTemporaryFile(suffix=".wav") as tmp_in, \
-             tempfile.NamedTemporaryFile(suffix=".wav") as tmp_out:
+        # Speed up 1.15x without pitch shift using ffmpeg (sox_effects removed in torchaudio 2.1+)
+        # Use delete=False so ffmpeg has exclusive access to the output file
+        tmp_in = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp_out = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+        tmp_in.close()
+        tmp_out.close()
+        try:
+            logging.warning("Hello 1")
             torchaudio.save(tmp_in.name, wav, self.model.sr, format="wav")
             result = subprocess.run(
                 [
-                    "ffmpeg", "-y", "-i", tmp_in.name,
-                    "-filter:a", "atempo=1.15",
-                    "-ar", str(self.model.sr),
+                    "ffmpeg",
+                    "-y",
+                    "-i",
+                    tmp_in.name,
+                    "-filter:a",
+                    "atempo=1.15",
+                    "-ar",
+                    str(self.model.sr),
                     tmp_out.name,
                 ],
                 capture_output=True,
             )
             if result.returncode != 0:
-                logging.error(json.dumps({
-                    "event": "ffmpeg_error",
-                    "stderr": result.stderr.decode(),
-                }))
-                raise RuntimeError(f"ffmpeg tempo adjustment failed: {result.stderr.decode()}")
+                logging.error(
+                    json.dumps(
+                        {
+                            "event": "ffmpeg_error",
+                            "stderr": result.stderr.decode(),
+                        }
+                    )
+                )
+                raise RuntimeError(
+                    f"ffmpeg tempo adjustment failed: {result.stderr.decode()}"
+                )
 
             result = self.whisper_model.transcribe(
-                tmp_out.name,
-                word_timestamps=True,
-                language="en")
+                tmp_out.name, word_timestamps=True, language="en"
+            )
 
-            buffer = io.BytesIO()
+            logging.warning("Hello 2")
             wav_sped, new_sr = torchaudio.load(tmp_out.name)
             words = []
             for segment in result["segments"]:
@@ -125,7 +146,9 @@ class PeterGriffinTTS:
             audio_key = f"audio/{job_id}/{reel_index}.wav"
             audio_path = Path(R2_MOUNT_PATH) / audio_key
             audio_path.parent.mkdir(parents=True, exist_ok=True)
-            torchaudio.save(str(audio_path), wav_sped, int(new_sr), format="wav")
+            
+            # Use shutil to copy the already-processed temp file to R2
+            shutil.copy(tmp_out.name, str(audio_path))
 
             # 7. Write timestamps JSON to R2
             timestamps_key = f"timestamps/{job_id}/{reel_index}.json"
@@ -139,7 +162,7 @@ class PeterGriffinTTS:
                     },
                     f,
                 )
-    
+
             logging.info(
                 json.dumps(
                     {
@@ -153,16 +176,16 @@ class PeterGriffinTTS:
                     }
                 )
             )
-    
+
             return {
                 "audioKey": audio_key,
                 "timestampsKey": timestamps_key,
                 "durationSeconds": round(duration, 2),
                 "wordCount": len(words),
             }
-
-        logging.info(json.dumps({"event": "generate_complete", "audio_bytes": buffer.tell()}))
-        return buffer.getvalue()
+        finally:
+            os.unlink(tmp_in.name)
+            os.unlink(tmp_out.name)
 
 
 @app.function(image=chatterbox_image)
@@ -176,7 +199,7 @@ def speak(body: dict):
     text = body.get("text", "")
     job_id = body.get("job_id", "")
     reel_index = body.get("reel_index")
- 
+
     if not text:
         logging.warning(json.dumps({"event": "missing_text"}))
         return Response(
@@ -198,7 +221,7 @@ def speak(body: dict):
             media_type="application/json",
             status_code=400,
         )
- 
+
     logging.info(
         json.dumps(
             {
@@ -209,11 +232,11 @@ def speak(body: dict):
             }
         )
     )
- 
+
     # --- Generate TTS + timestamps + write to R2 ---
     tts = PeterGriffinTTS()
     result = tts.generate_with_timestamps.remote(text, job_id, reel_index)
- 
+
     logging.info(
         json.dumps(
             {
@@ -227,9 +250,7 @@ def speak(body: dict):
             }
         )
     )
- 
-    logging.info(json.dumps({"event": "speak_response", "audio_bytes": len(audio_data)}))
-    return Response(content=audio_data, media_type="audio/wav")
+
     return Response(
         content=json.dumps(
             {
@@ -248,6 +269,7 @@ def speak(body: dict):
 def main(text: str = "Hey Lois, I'm a cloud function!"):
     tts = PeterGriffinTTS()
     result = tts.generate_with_timestamps.remote(text, "test-local", 0)
+
 
 if __name__ == "__main__":
     app.run()
