@@ -86,6 +86,15 @@ async function handleApi(
         );
       }
 
+      const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+      if (file.size > MAX_FILE_SIZE) {
+        log("warn", "upload rejected: file too large", { size: file.size, name: file.name, maxSize: MAX_FILE_SIZE });
+        return Response.json(
+          { message: "File exceeds the 10 MB size limit" },
+          { status: 413, headers: corsHeaders },
+        );
+      }
+
       // TODO: Forward the PDF to Modal for processing
       // const modalResponse = await fetch("https://your-modal-endpoint.modal.run/process", {
       //   method: "POST",
