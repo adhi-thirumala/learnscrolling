@@ -105,7 +105,34 @@ export class ReelGenerationWorkflow extends WorkflowEntrypoint<
             },
         );
 
-        // Step 2: Send full text to LLM, get back reel scripts
+            },
+        );
+
+        // Step 2: Cleanup PDF from R2 (best-effort, after parse output is persisted)
+        await step.do(
+            "cleanup-pdf",
+            {
+                retries: { limit: 3, delay: "5 seconds", backoff: "linear" },
+                timeout: "30 seconds",
+            },
+            async () => {
+                try {
+                    await this.env.BUCKET.delete(pdfKey);
+                    log("info", "cleanup-pdf: PDF deleted from R2", {
+                        jobId,
+                        pdfKey,
+                    });
+                } catch (err) {
+                    log("warn", "cleanup-pdf: failed to delete PDF from R2", {
+                        jobId,
+                        pdfKey,
+                        error: err instanceof Error ? err.message : String(err),
+                    });
+                }
+            },
+        );
+
+        // Step 3: Send full text to LLM, get back reel scripts
         const scripts = await step.do(
             "generate-scripts",
             {

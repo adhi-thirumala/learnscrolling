@@ -197,18 +197,38 @@ export async function generateScripts(
 ): Promise<ReelScript[]> {
   const { apiUrl, apiKey, model } = config;
 
+  const trimmedApiUrl = apiUrl?.trim();
+  const trimmedApiKey = apiKey?.trim();
+  const trimmedModel = model?.trim();
+
+  if (!trimmedApiUrl) {
+    log("error", "llm: missing or empty apiUrl in configuration", {});
+    throw new Error("Invalid LLM configuration: apiUrl is missing or empty");
+  }
+
+  if (!trimmedApiKey) {
+    log("error", "llm: missing or empty apiKey in configuration", {});
+    throw new Error("Invalid LLM configuration: apiKey is missing or empty");
+  }
+
+  if (!trimmedModel) {
+    log("error", "llm: missing or empty model in configuration", {});
+    throw new Error("Invalid LLM configuration: model is missing or empty");
+  }
+
   log("info", "llm: sending request", {
-    model,
-    apiUrl,
+    model: trimmedModel,
+    apiUrl: trimmedApiUrl,
     inputLengthChars: text.length,
   });
 
   const client = new OpenAI({
-    baseURL: `${apiUrl.replace(/\/$/, "")}/v1`,
-    apiKey,
+    baseURL: `${trimmedApiUrl.replace(/\/$/, "")}/v1`,
+    apiKey: trimmedApiKey,
   });
 
   const completion = await client.chat.completions.create({
+    model: trimmedModel,
     model,
     messages: [
       { role: "system", content: SYSTEM_PROMPT },
