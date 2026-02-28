@@ -5,7 +5,7 @@ import os
 # Define the image with necessary dependencies
 chatterbox_image = (
     modal.Image.debian_slim(python_version="3.11")
-    .apt_install("ffmpeg", "git")
+    .apt_install("ffmpeg", "git", "sox", "libsox-dev", "libsox-fmt-all")
     .uv_sync()
     .add_local_dir("./petergriffin", remote_path="/root/petergriffin")
 )
@@ -24,10 +24,12 @@ CACHE_DIR = "/root/cache"
     # Mount the volume to persist the model weights
     volumes={CACHE_DIR: cache_volume},
     # Requires a Modal Secret named 'huggingface-secret' with HF_TOKEN key
+    enable_memory_snapshot=True,
     secrets=[modal.Secret.from_name("huggingface-secret")],
+    experimental_options={"enable_gpu_snapshot": True},
 )
 class PeterGriffinTTS:
-    @modal.enter()
+    @modal.enter(snap=True)
     def load_model(self):
         # Set the Hugging Face cache directory to the mounted volume
         os.environ["HF_HOME"] = CACHE_DIR
@@ -44,22 +46,45 @@ class PeterGriffinTTS:
         import torchaudio
 
         # Generate the audio using Peter Griffin's voice as the prompt
-        wav = self.model.generate(text, audio_prompt_path=self.audio_prompt_path)
+        wav = self.model.generate(text, audio_prompt_path=self.audio_prompt_path, exaggeration=0.7)
 
+        wav = wav.cpu()
+
+        if wav.dim() == 1:
+            wav = wav.unsqueeze(0)
+
+        # Speed up 1.5x without pitch shift
+        effects = [['tempo', '1.5']]
+        wav_sped, new_sr = torchaudio.sox_effects.apply_effects_tensor(wav, self.model.sr, effects)
         # Save to buffer
         buffer = io.BytesIO()
-        torchaudio.save(buffer, wav, self.model.sr, format="wav")
+        torchaudio.save(buffer, wav_sped, int(new_sr), format="wav")
         return buffer.getvalue()
 
 
 @app.function(image=chatterbox_image)
-@modal.fastapi_endpoint()
-def speak(text: str):
+@modal.fastapi_endpoint(method="POST")
+def speak(body: dict):
+    api_key = "d736adf4b03b0519393e6d5cbedc73bb81539edb2771d856bff265e59e44f559"
+    import json
+    import logging
     from fastapi import Response
+
+    text = body.get("text", "")
+    logging.info(json.dumps({"event": "speak_request", "text_length": len(text)}))
+
+    if not text:
+        logging.warning(json.dumps({"event": "speak_request_missing_text"}))
+        return Response(
+            content=json.dumps({"error": "text field is required"}),
+            media_type="application/json",
+            status_code=400,
+        )
 
     tts = PeterGriffinTTS()
     audio_data = tts.generate.remote(text)
 
+    logging.info(json.dumps({"event": "speak_response", "audio_bytes": len(audio_data)}))
     return Response(content=audio_data, media_type="audio/wav")
 
 
