@@ -138,7 +138,7 @@ export default function App() {
                             </span>
                         </h2>
                         <p className="text-neutral-400">
-                            Upload a PDF of your textbook and we'll generate short-form video with Peter and Stewie Griffin from Family Guy<sup>1</sup> discussing the content over Minecraft <sup>1</sup> parkour gameplay.
+                            Upload a PDF of your textbook and we'll generate short-form video with Peter and Stewie Griffin from Family Guy<sup>1</sup> discussing the content over Minecraft parkour gameplay.
                         </p>
                     </div>
 
