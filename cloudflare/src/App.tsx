@@ -84,10 +84,36 @@ export default function App() {
                 body: formData,
             });
 
-            const data = (await res.json()) as { jobId: string; message: string };
+            if (!res.ok) {
+                let errorMessage = "Upload failed";
 
-            if (!res.ok) throw new Error(data.message || "Upload failed");
+                // Try to extract an error message from a JSON response, if present
+                try {
+                    const errorData = (await res.json()) as { message?: string };
+                    if (errorData && typeof errorData.message === "string" && errorData.message.trim() !== "") {
+                        errorMessage = errorData.message;
+                    }
+                } catch {
+                    // If the body isn't valid JSON, fall back to plain text (if any)
+                    try {
+                        const text = await res.text();
+                        if (text.trim() !== "") {
+                            errorMessage = text;
+                        }
+                    } catch {
+                        // Ignore secondary errors and keep the default message
+                    }
+                }
 
+                throw new Error(errorMessage);
+            }
+
+            let data: { jobId: string; message: string };
+            try {
+                data = (await res.json()) as { jobId: string; message: string };
+            } catch {
+                throw new Error("Invalid server response");
+            }
             setUpload((prev) => ({
                 ...prev,
                 status: "done",
