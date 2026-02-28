@@ -27,6 +27,8 @@
   ],
   "vars": {
     "LLM_API_URL": "http://localhost:8000",
-    "LLM_MODEL": "peter-griffin-brainrot"
+    "LLM_MODEL": "peter-griffin-brainrot",
+    "TTS_API_URL": "https://arijz--peter-griffin-chatterbox-speak.modal.run/",
+    "VIDEO_COMPOSITOR_URL": "https://adhi-thirumala--learnscrolling-compositor-composite-video.modal.run"
   }
 }

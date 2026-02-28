@@ -73,3 +73,51 @@ we resolves uv sync by takng a version of perth from github which has the correc
 - Created `worker/llm.ts` with the system prompt, `ReelScript` types, and `generateScripts()` function. The file doubles as a spec for the person implementing the LLM endpoint -- it documents the exact OpenAI-compatible request/response contract.
 - LLM env vars: `LLM_API_URL` and `LLM_MODEL` are in `wrangler.jsonc` as `vars`. `LLM_API_KEY` is a secret (set via `wrangler secret put LLM_API_KEY`). Added `worker/env.d.ts` to declare the secret type since `wrangler types` only generates types for vars, not secrets.
 - generate-scripts retry config: 3 retries, 30s initial delay, exponential backoff, 5 min timeout. Each attempt gets the full 5 minutes -- the delay is only the wait between retries, not a response timeout.
+
+### Whisper Word-Level Timestamps Integration (2026-02-28)
+- Chatterbox TTS does NOT output word-level timestamps — only raw audio tensors
+- Added `openai-whisper` to pyproject.toml, loaded Whisper `base` (~150MB) in the same `@modal.enter(snap=True)` as Chatterbox so both models are in the GPU memory snapshot
+- New method `generate_with_timestamps()`: Chatterbox -> sox tempo 1.5x -> Whisper on sped-up audio -> returns `{audioWavBytes, wordTimestamps, durationSeconds}`
+- Critical: Whisper runs on the POST-tempo audio so timestamps match the final delivered WAV. If we ran on original and scaled by 1/1.5, rounding errors would accumulate.
+- Whisper `base` on clean TTS audio (no background noise) should give near-perfect word-level alignment
+- Next step: use these word timestamps to generate `.ass` subtitle files for TikTok-style overlays in the FFmpeg video compositor
+
+### TTS API Refactor — R2 Cloud Bucket Mount (2026-02-28)
+- Replaced presigned URL approach with `modal.CloudBucketMount` — mounts R2 bucket directly as a filesystem at `/root/r2`
+- Modal writes files directly: `audio/{jobId}/{reelIndex}.wav` and `timestamps/{jobId}/{reelIndex}.json`
+- No boto3 needed, no presigned URLs — just filesystem writes via mountpoint-s3
+- Removed old `speak()` and `speak_with_timestamps()` endpoints, replaced with single `POST /generate_speech`
+- API key auth: `tts-api-key` Modal Secret provides `TTS_API_KEY` env var, checked against `api_key` field in request body
+- Removed hardcoded API key (was on old `speak()` endpoint)
+- Input: `{ api_key, text, job_id, reel_index }` — see `API.md` for full contract
+- Output: `{ success, audioKey, timestampsKey, durationSeconds, wordCount }`
+- R2 credentials stored as Modal Secret `r2-secret` with `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`
+- `bucket_endpoint_url` is hardcoded at module level using `CF_ACCOUNT_ID` env var — Modal secrets are NOT available at import time, so this must be a system env var or hardcoded. Account ID is not secret (it's in every R2 public URL).
+- `CloudBucketMount` goes inline in the `volumes={}` dict on the `@app.cls` decorator, NOT defined as a module-level variable (Modal resolves it lazily)
+- CloudBucketMount limitation: files cannot be opened in append mode, must write in truncate mode. Fine for our use case (write-once).
+- The `r2-secret` only needs to be on the `@app.cls` (where the mount is), NOT on the `@app.function` endpoint — the endpoint just calls `.remote()` into the cls
+- Local entrypoint now also writes to R2 (tests the full pipeline including upload)
+
+### Workflow.ts Fixed + Audio Step Added (2026-02-28)
+- workflow.ts had duplicate PDF delete (once in step 1, once in separate cleanup-pdf step) plus stray `},` and `);` causing syntax errors. Inconsistent indentation throughout.
+- Fixed: removed duplicate delete from step 1, kept it in dedicated cleanup-pdf step. Fixed all syntax and indentation.
+- Added Step 4: `generate-audio-{index}` — calls Modal TTS endpoint (`TTS_API_URL`) for each reel script in parallel via `Promise.all` + `step.do`. Sends `{ api_key, text, job_id, reel_index }`, expects `{ success, audioKey, timestampsKey, durationSeconds, wordCount }`.
+- Added `TTS_API_URL` as a wrangler var (set to Modal endpoint URL after deploy) and `TTS_API_KEY` as a wrangler secret. Both declared in `worker/env.d.ts`.
+- The TTS_API_KEY is shared between the Cloudflare Worker (sender) and Modal `tts-api-key` secret (receiver) — same key, set in both places.
+
+### Video Compositor Implemented (2026-02-28)
+- New file: `inference-backend/compositor.py` — separate Modal App (`learnscrolling-compositor`)
+- **Image**: `nvidia/cuda:12.6.0-runtime-ubuntu24.04` base + BtbN static FFmpeg (GPL build with NVENC) + `libass9` for subtitle rendering
+- **GPU**: H100 — 8th gen NVENC encoder, fastest available. Overkill cost-wise but fast.
+- **R2**: Same `CloudBucketMount` pattern as TTS. Reads `audio/{jobId}/{reelIndex}.wav` + `timestamps/{jobId}/{reelIndex}.json`, writes `reels/{jobId}/{reelIndex}.mp4`.
+- **Media assets**: Baked into container image via `add_local_dir("./petergriffin", remote_path="/root/media")` — same pattern as TTS app. No Modal Volume needed. Files referenced by their original filenames on disk.
+- **ASS subtitle generation**: TikTok karaoke style with `\k` tags for per-word highlight timing. 4 words per line, DejaVu Sans 72pt bold, white on black outline, centered near bottom. `generate_ass_subtitles()` function takes word timestamps and returns complete ASS file content.
+- **FFmpeg pipeline**: `-ss` random offset into Minecraft → scale/crop to 1080x1920 → overlay Peter Griffin PNG bottom-left → burn in ASS subtitles → `h264_nvenc` encode with `-preset p4 -cq 23` → AAC audio 128kbps → `faststart` flag
+- **Key detail**: FFmpeg filter graph is CPU-bound (scale, crop, overlay, ASS text rasterization). Only the final H.264 encode step is GPU-accelerated via NVENC. On H100, encode is ~2-3s for a 60s clip.
+- **Endpoint**: `POST /composite_video` with same auth pattern (api_key in body vs `COMPOSITOR_API_KEY` from Modal Secret)
+- **Workflow Step 5**: `composite-video-{index}` in workflow.ts, parallel via `Promise.all`, 10 min timeout, 2 retries with exponential backoff
+- Added `VIDEO_COMPOSITOR_URL` (wrangler var) and `VIDEO_COMPOSITOR_API_KEY` (wrangler secret) to env.d.ts and wrangler.jsonc
+- BtbN FFmpeg static builds are self-contained binaries — they include NVENC code compiled in. At runtime they dynamically link against `libnvidia-encode.so` which Modal provides via driver injection on GPU machines.
+- TODO: verify `ffmpeg -encoders | grep nvenc` actually works at runtime on Modal H100 (it's verified at image build time but driver libs are injected at runtime)
+- TODO: the `libass` ASS filter in BtbN static FFmpeg may need the system `libass.so` — that's why we `apt_install("libass9", "libass-dev")`
+- TODO: if Minecraft source video isn't H.264, keyframe-based seek (`-ss` before `-i`) may be slow. Verify with ffprobe.
