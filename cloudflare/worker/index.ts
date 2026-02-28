@@ -118,17 +118,18 @@ async function handleApi(
     }
   }
 
-  // GET /api/status/:id — check job status (stubbed)
+  // GET /api/status/:id — job status endpoint is not yet implemented
   if (url.pathname.startsWith("/api/status/") && request.method === "GET") {
     const jobId = url.pathname.split("/api/status/")[1];
-    log("info", "status check", { jobId });
+    log("info", "status check (stubbed endpoint)", { jobId });
     return Response.json(
       {
         jobId,
-        status: "processing",
-        message: "Your reel is being generated...",
+        status: "not_implemented",
+        message:
+          "Job status tracking is not yet implemented. This endpoint is a stub and does not reflect real processing state.",
       },
-      { headers: corsHeaders },
+      { status: 501, headers: corsHeaders },
     );
   }
 
