@@ -1,8 +1,17 @@
-interface Env {
-  ASSETS: Fetcher;
-}
+import { Hono } from "hono";
+import { cors } from "hono/cors";
+import { logger } from "hono/logger";
 
-function log(level: "info" | "warn" | "error", msg: string, data?: Record<string, unknown>) {
+// Re-export the Workflow class so wrangler can discover it
+export { ReelGenerationWorkflow } from "./workflow";
+
+// --- Helpers ---
+
+function log(
+  level: "info" | "warn" | "error",
+  msg: string,
+  data?: Record<string, unknown>,
+) {
   const entry = {
     timestamp: new Date().toISOString(),
     level,
@@ -18,133 +27,90 @@ function log(level: "info" | "warn" | "error", msg: string, data?: Record<string
   }
 }
 
+// --- App ---
+
+const api = new Hono<{ Bindings: Env }>()
+  .use("*", cors())
+  .use("*", logger());
+
+// POST /api/upload -- receive PDF, store in R2, trigger Workflow
+api.post("/api/upload", async (c) => {
+  const formData = await c.req.formData();
+  const entry = formData.get("file");
+
+  if (!entry || typeof entry === "string") {
+    log("warn", "upload missing file");
+    return c.json({ message: "No file provided" }, 400);
+  }
+
+  const file = entry as unknown as File;
+
+  if (file.type !== "application/pdf") {
+    log("warn", "upload rejected: wrong file type", {
+      type: file.type,
+      name: file.name,
+    });
+    return c.json({ message: "Only PDF files are accepted" }, 400);
+  }
+
+  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+  if (file.size > MAX_FILE_SIZE) {
+    log("warn", "upload rejected: file too large", {
+      size: file.size,
+      name: file.name,
+      maxSize: MAX_FILE_SIZE,
+    });
+    return c.json({ message: "File exceeds the 10 MB size limit" }, 413);
+  }
+
+  const jobId = crypto.randomUUID();
+  const pdfKey = `pdfs/${jobId}.pdf`;
+
+  log("info", "uploading PDF to R2", { jobId, pdfKey, fileSize: file.size });
+  await c.env.BUCKET.put(pdfKey, file.stream(), {
+    httpMetadata: { contentType: "application/pdf" },
+    customMetadata: { originalName: file.name, jobId },
+  });
+  log("info", "PDF uploaded to R2", { jobId, pdfKey });
+
+  log("info", "triggering workflow", { jobId, pdfKey });
+  const instance = await c.env.REEL_WORKFLOW.create({
+    id: jobId,
+    params: { jobId, pdfKey },
+  });
+  log("info", "workflow triggered", { jobId, instanceId: instance.id });
+
+  return c.json({
+    jobId,
+    message: `PDF "${file.name}" received (${(file.size / 1024).toFixed(1)} KB). Processing started.`,
+  });
+});
+
+// GET /api/status/:id -- job status (stub)
+api.get("/api/status/:id", async (c) => {
+  const jobId = c.req.param("id");
+  log("info", "status check (stubbed)", { jobId });
+  return c.json(
+    {
+      jobId,
+      status: "not_implemented",
+      message: "Job status tracking is not yet implemented.",
+    },
+    501,
+  );
+});
+
+// --- Entrypoint ---
+
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
-    const start = Date.now();
 
-    // API routes
     if (url.pathname.startsWith("/api/")) {
-      log("info", "api request", {
-        method: request.method,
-        path: url.pathname,
-      });
-
-      const response = await handleApi(request, url);
-
-      log("info", "api response", {
-        method: request.method,
-        path: url.pathname,
-        status: response.status,
-        durationMs: Date.now() - start,
-      });
-
-      return response;
+      return api.fetch(request, env, ctx);
     }
 
-    // Everything else — serve static assets (React SPA)
+    // Everything else -- serve static assets (React SPA)
     return env.ASSETS.fetch(request);
   },
 } satisfies ExportedHandler<Env>;
-
-async function handleApi(
-  request: Request,
-  url: URL,
-): Promise<Response> {
-  // CORS headers for local dev
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-  };
-
-  if (request.method === "OPTIONS") {
-    return new Response(null, { headers: corsHeaders });
-  }
-
-  // POST /api/upload — receive PDF, forward to Modal (stubbed)
-  if (url.pathname === "/api/upload" && request.method === "POST") {
-    try {
-      const formData = await request.formData();
-      const entry = formData.get("file");
-
-      if (!entry || typeof entry === "string") {
-        log("warn", "upload missing file");
-        return Response.json(
-          { message: "No file provided" },
-          { status: 400, headers: corsHeaders },
-        );
-      }
-
-      const file = entry as unknown as File;
-
-      if (file.type !== "application/pdf") {
-        log("warn", "upload rejected: wrong file type", { type: file.type, name: file.name });
-        return Response.json(
-          { message: "Only PDF files are accepted" },
-          { status: 400, headers: corsHeaders },
-        );
-      }
-
-      const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
-      if (file.size > MAX_FILE_SIZE) {
-        log("warn", "upload rejected: file too large", { size: file.size, name: file.name, maxSize: MAX_FILE_SIZE });
-        return Response.json(
-          { message: "File exceeds the 10 MB size limit" },
-          { status: 413, headers: corsHeaders },
-        );
-      }
-
-      // TODO: Forward the PDF to Modal for processing
-      // const modalResponse = await fetch("https://your-modal-endpoint.modal.run/process", {
-      //   method: "POST",
-      //   body: formData,
-      // });
-
-      const jobId = crypto.randomUUID();
-
-      log("info", "upload accepted", {
-        jobId,
-        fileName: file.name,
-        fileSize: file.size,
-      });
-
-      return Response.json(
-        {
-          jobId,
-          message: `PDF "${file.name}" received (${(file.size / 1024).toFixed(1)} KB). Processing will begin shortly.`,
-        },
-        { headers: corsHeaders },
-      );
-    } catch (err) {
-      log("error", "upload failed", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return Response.json(
-        { message: "Failed to process upload" },
-        { status: 500, headers: corsHeaders },
-      );
-    }
-  }
-
-  // GET /api/status/:id — job status endpoint is not yet implemented
-  if (url.pathname.startsWith("/api/status/") && request.method === "GET") {
-    const jobId = url.pathname.split("/api/status/")[1];
-    log("info", "status check (stubbed endpoint)", { jobId });
-    return Response.json(
-      {
-        jobId,
-        status: "not_implemented",
-        message:
-          "Job status tracking is not yet implemented. This endpoint is a stub and does not reflect real processing state.",
-      },
-      { status: 501, headers: corsHeaders },
-    );
-  }
-
-  log("warn", "route not found", { path: url.pathname, method: request.method });
-  return Response.json(
-    { message: "Not found" },
-    { status: 404, headers: corsHeaders },
-  );
-}

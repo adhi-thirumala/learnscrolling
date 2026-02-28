@@ -5,7 +5,28 @@
   "compatibility_flags": ["nodejs_compat"],
   "main": "worker/index.ts",
   "assets": {
+    "directory": "dist",
     "not_found_handling": "single-page-application",
     "binding": "ASSETS"
+  },
+  "observability": {
+    "enabled": true
+  },
+  "r2_buckets": [
+    {
+      "binding": "BUCKET",
+      "bucket_name": "learnscrolling-assets"
+    }
+  ],
+  "workflows": [
+    {
+      "name": "reel-generation",
+      "binding": "REEL_WORKFLOW",
+      "class_name": "ReelGenerationWorkflow"
+    }
+  ],
+  "vars": {
+    "LLM_API_URL": "http://localhost:8000",
+    "LLM_MODEL": "peter-griffin-brainrot"
   }
 }
