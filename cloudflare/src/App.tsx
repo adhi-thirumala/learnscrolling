@@ -148,6 +148,15 @@ export default function App() {
                         onDragOver={handleDragOver}
                         onDragLeave={handleDragLeave}
                         onClick={() => fileInputRef.current?.click()}
+                        onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                                e.preventDefault();
+                                fileInputRef.current?.click();
+                            }
+                        }}
+                        role="button"
+                        tabIndex={0}
+                        aria-label="Upload PDF file"
                         className={`
               relative cursor-pointer rounded-2xl border-2 border-dashed p-12
               transition-all duration-200 text-center
