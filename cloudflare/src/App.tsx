@@ -253,10 +253,10 @@ export default function App() {
                     <div className="flex items-center gap-3">
                         <button
                             onClick={handleUpload}
-                            disabled={!upload.file || upload.status === "uploading"}
+                            disabled={!upload.file || upload.status === "uploading" || upload.status === "done"}
                             className={`
                 flex-1 py-3 px-6 rounded-xl font-semibold text-sm transition-all duration-200
-                ${upload.file && upload.status !== "uploading"
+                ${upload.file && upload.status !== "uploading" && upload.status !== "done"
                                     ? "bg-gradient-to-r from-green-start to-green-mid text-black hover:shadow-lg hover:shadow-green-start/20 hover:scale-[1.01] active:scale-[0.99]"
                                     : "bg-surface-raised text-neutral-600 cursor-not-allowed"
                                 }
@@ -285,6 +285,8 @@ export default function App() {
                                     </svg>
                                     Uploading...
                                 </span>
+                            ) : upload.status === "done" ? (
+                                "Reel Queued ✓"
                             ) : (
                                 "Generate Reel"
                             )}
