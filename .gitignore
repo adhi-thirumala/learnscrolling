@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.python-version
+
+# Build outputs
+*.tsbuildinfo
+
+# OS
+.DS_Store
