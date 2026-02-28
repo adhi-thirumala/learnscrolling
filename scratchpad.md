@@ -36,3 +36,15 @@
 - Lesson: when using Modal, `.pip_install()` is more reliable than `.uv_sync()` for packages that need `setuptools`/`pkg_resources`
 - Lesson: build-time validation (`run_commands`) can pass while runtime still fails due to different environments
 - Once `resemble-perth` releases a new version using `importlib.resources` instead of `pkg_resources`, `uv_sync` should work fine
+
+### System Design Complete (2026-02-28)
+- Full design documented in DESIGN.md
+- Architecture: Cloudflare Workflow orchestrates the pipeline (parse -> chunk -> LLM -> TTS -> video)
+- Worker handles API routes + SSE streaming to frontend
+- Modal handles all heavy compute: LLM script gen, Chatterbox TTS, Whisper alignment, FFmpeg compositing
+- Presigned R2 URLs for Modal -> R2 uploads (no credential sprawl)
+- Whisper needed for word-level subtitle timestamps (Chatterbox doesn't support timestamps natively)
+- D1 for job/chunk state tracking, R2 for file storage
+- Assets (Minecraft MP4, Peter Griffin PNG) live on a shared Modal Volume
+- All chunks processed in parallel for speed
+- LLM model choice still TBD -- interface designed to be model-agnostic
