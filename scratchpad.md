@@ -151,6 +151,16 @@ we resolves uv sync by takng a version of perth from github which has the correc
 - Lesson: always check for hardcoded generation limits in TTS/LLM libraries. The `# TODO` comment in the source was a dead giveaway.
 - Also cleaned up dead code in `speak()` endpoint: removed unreachable `return Response(content=audio_data, ...)` that referenced undefined `audio_data` variable, and removed hardcoded API key.
 
+### 524 Timeout Fix — Fire-and-Forget + R2 Polling (2026-02-28)
+- **Root cause**: Modal endpoints (`.modal.run`) are behind Cloudflare's proxy. The Proxy Read Timeout is 120 seconds (non-configurable except on Enterprise). Modal TTS takes 2-4 minutes, compositor takes 1-3 minutes. So the fetch always 524s for longer jobs.
+- **Wrong approach #1**: Idempotency checks alone. They only help if the previous attempt already finished writing to R2 before the retry runs. With 10s retry delay and 4-minute Modal jobs, the output isn't there yet.
+- **Wrong approach #2**: Polling R2 after a 524 error. Same timing issue — the 524 fires at 120s, but Modal needs another 2+ minutes. Would need to poll for minutes inside the step.
+- **Actual fix**: Make Modal endpoints **fire-and-forget** using `.spawn()` instead of `.remote()`. The HTTP endpoint returns `{"accepted": true}` in <1 second. No 524 possible. The Workflow step then polls R2 for the output (every 10s, up to 36 attempts = 6 minutes). Since Workflow steps have unlimited wall clock time, this works perfectly.
+- Modal changes: `app.py` `speak()` and `compositor.py` `composite_video()` both switched from `.remote()` to `.spawn()`.
+- Worker changes: `workflow.ts` audio and video steps now: (1) check R2 for existing output (idempotency), (2) fire HTTP request to Modal (returns instantly), (3) poll R2 every 10s until output appears, (4) read metadata from R2 and return result.
+- Step timeouts increased to 10 minutes. Retry delay increased to 30s.
+- Key insight from CF docs: "Duration (wall clock) per step: Unlimited" and "There is no set time limit on individual subrequests" — the Worker can poll R2 as long as it wants. The 524 was only on the *outbound fetch to Modal*, not on the Workflow step itself.
+
 ### KV-Based Progress Tracking (2026-02-28)
 - Cloudflare Workflow `instance.status()` only returns coarse-grained status (queued/running/complete/errored) — no step-level visibility
 - Solution: KV namespace (`PROGRESS_KV`) for granular progress tracking
@@ -176,6 +186,18 @@ we resolves uv sync by takng a version of perth from github which has the correc
 - Added `secrets=[modal.Secret.from_name("tts-api-key")]` to the `@app.function` decorator so `TTS_API_KEY` is available as an env var
 - Added auth check block (read env var, compare to `body.get("api_key")`, return 401 on mismatch) — identical pattern to compositor's auth in `compositor.py:382-391`
 - Both endpoints now use the same structure: Modal Secret on decorator -> `os.environ.get()` -> compare -> 401
+
+### Scrollable Reel Feed (2026-02-28)
+- Replaced the stacked grid of video cards with a TikTok/Reels-style scroll-snap vertical feed
+- New component: `workers/src/ReelFeed.tsx` — self-contained, receives `Reel[]` as props
+- **Scroll-snap**: Container uses `overflow-y: scroll` + `snap-y snap-mandatory`. Each slot is `snap-start snap-always` and fills the full container height.
+- **Arrow key navigation**: `ArrowUp`/`ArrowDown` (and Left/Right) navigate between reels. Uses a `useRef` for `currentIndex` (not state — avoids re-renders on every keypress). Calls `scrollIntoView({ behavior: 'smooth' })`.
+- **Auto-play/pause**: `IntersectionObserver` with `root: container` and `threshold: 0.6`. When a video enters view, it resets to `currentTime = 0` and plays. When it leaves, it pauses and resets. Syncs `currentIndexRef` so arrow keys stay in sync with manual scrolling.
+- **Sound handling**: First play attempt is unmuted (user has interacted via upload). If autoplay blocked, falls back to muted + sets muted state. Click on video toggles mute.
+- **Scrollbar hidden**: Added `.scrollbar-hide` utility class in `index.css` (webkit + Firefox + IE).
+- **No overlay**: Clean video-only presentation per user preference. No reel counter, no download buttons on feed.
+- Container is `h-[80vh]` — contained within the page, not full viewport.
+- Lesson: Use `useRef` instead of `useState` for values that don't drive rendering (like currentIndex used only for scroll calculations). Avoids unnecessary re-renders in the IntersectionObserver callback.
 
 ### Temp File Cleanup in Workflow (2026-02-28)
 - Added Step 6 (`cleanup-intermediates`) to `workflow.ts` after video compositing completes

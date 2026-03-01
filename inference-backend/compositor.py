@@ -437,8 +437,11 @@ def composite_video(body: dict):
         )
     )
 
-    # --- Run compositor ---
-    result = composite.remote(
+    # --- Fire-and-forget: spawn the GPU work and return immediately ---
+    # The caller (CF Workflow) will poll R2 for the output file instead of
+    # waiting for this HTTP response to carry the result. This avoids the
+    # 120-second Cloudflare Proxy Read Timeout (524) on long compositing jobs.
+    composite.spawn(
         job_id=job_id,
         reel_index=reel_index,
         audio_key=audio_key,
@@ -449,16 +452,15 @@ def composite_video(body: dict):
     logging.info(
         json.dumps(
             {
-                "event": "composite_video_complete",
+                "event": "composite_video_spawned",
                 "job_id": job_id,
                 "reel_index": reel_index,
-                "video_key": result["videoKey"],
             }
         )
     )
 
     return Response(
-        content=json.dumps(result),
+        content=json.dumps({"accepted": True, "job_id": job_id, "reel_index": reel_index}),
         media_type="application/json",
     )
 

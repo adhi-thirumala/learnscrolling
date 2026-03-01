@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from "react";
+import ReelFeed from "./ReelFeed";
 
 type UploadStatus = "idle" | "uploading" | "done" | "error";
 
@@ -484,51 +485,9 @@ export default function App() {
                         </div>
                     )}
 
-                    {/* Completed Reels */}
+                    {/* Completed Reels — scrollable short-form feed */}
                     {reels.length > 0 && (
-                        <div className="space-y-4">
-                            <div className="flex items-center gap-2">
-                                <div className="size-5 rounded-full bg-green-start/20 flex items-center justify-center">
-                                    <svg className="size-3 text-green-mid" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
-                                        <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
-                                    </svg>
-                                </div>
-                                <h3 className="text-sm font-medium text-neutral-200">
-                                    {reels.length} {reels.length === 1 ? "Reel" : "Reels"} Ready
-                                </h3>
-                            </div>
-
-                            <div className="grid gap-4">
-                                {reels.map((reel) => (
-                                    <div
-                                        key={reel.index}
-                                        className="rounded-xl border border-border-subtle bg-surface-raised overflow-hidden"
-                                    >
-                                        <div className="px-4 py-2 border-b border-border-subtle flex items-center justify-between">
-                                            <span className="text-xs font-medium text-neutral-400">
-                                                Reel {reel.index + 1}
-                                            </span>
-                                            <a
-                                                href={reel.url}
-                                                download={`reel-${reel.index + 1}.mp4`}
-                                                className="text-xs text-green-mid hover:text-green-end transition-colors"
-                                            >
-                                                Download
-                                            </a>
-                                        </div>
-                                        <div className="aspect-[9/16] max-h-[600px] bg-black flex items-center justify-center">
-                                            <video
-                                                src={reel.url}
-                                                controls
-                                                playsInline
-                                                preload="metadata"
-                                                className="w-full h-full object-contain"
-                                            />
-                                        </div>
-                                    </div>
-                                ))}
-                            </div>
-                        </div>
+                        <ReelFeed reels={reels} />
                     )}
                 </div>
             </main>

@@ -24,6 +24,46 @@ export interface ParsedPdf {
 /** 24 hours in seconds — progress keys auto-expire after this */
 const PROGRESS_TTL = 86400;
 
+/** Max poll attempts when waiting for Modal output to appear in R2 (36 * 10s = 6 min) */
+const R2_POLL_MAX_ATTEMPTS = 36;
+/** Interval between R2 polls in ms (10 seconds) */
+const R2_POLL_INTERVAL_MS = 10_000;
+
+/**
+ * Poll R2 for a key to appear. Modal endpoints return immediately after
+ * spawning work — the actual output lands in R2 once the GPU job finishes.
+ * Returns true if the key appeared within the time limit.
+ */
+async function pollR2ForKey(
+    bucket: R2Bucket,
+    key: string,
+    jobId: string,
+    label: string,
+): Promise<boolean> {
+    for (let i = 1; i <= R2_POLL_MAX_ATTEMPTS; i++) {
+        await new Promise((r) => setTimeout(r, R2_POLL_INTERVAL_MS));
+        const head = await bucket.head(key);
+        if (head) {
+            log("info", `${label}: output appeared in R2 after polling`, {
+                jobId,
+                key,
+                pollAttempt: i,
+                waitedSeconds: i * (R2_POLL_INTERVAL_MS / 1000),
+            });
+            return true;
+        }
+        if (i % 6 === 0) {
+            log("info", `${label}: still polling R2 for output`, {
+                jobId,
+                key,
+                pollAttempt: i,
+                waitedSeconds: i * (R2_POLL_INTERVAL_MS / 1000),
+            });
+        }
+    }
+    return false;
+}
+
 function log(
     level: "info" | "warn" | "error",
     msg: string,
@@ -246,16 +286,43 @@ export class ReelGenerationWorkflow extends WorkflowEntrypoint<
                     {
                         retries: {
                             limit: 2,
-                            delay: "10 seconds",
+                            delay: "30 seconds",
                             backoff: "exponential",
                         },
-                        timeout: "5 minutes",
+                        timeout: "10 minutes",
                     },
                     async () => {
-                        log("info", "generate-audio: calling Modal TTS", {
-                            jobId,
-                            reelIndex: index,
-                            textLength: script.script.length,
+                        const audioKey = `audio/${jobId}/${index}.wav`;
+                        const timestampsKey = `timestamps/${jobId}/${index}.json`;
+
+                        // Idempotency: if output already exists (previous attempt),
+                        // skip the Modal call entirely.
+                        const existingTs = await this.env.BUCKET.get(timestampsKey);
+                        if (existingTs && (await this.env.BUCKET.head(audioKey))) {
+                            const tsData = (await existingTs.json()) as {
+                                wordTimestamps: { word: string; start: number; end: number }[];
+                                durationSeconds: number;
+                            };
+                            log("info", "generate-audio: output already in R2, skipping", {
+                                jobId, reelIndex: index,
+                            });
+                            const result = {
+                                success: true as const, audioKey, timestampsKey,
+                                durationSeconds: tsData.durationSeconds,
+                                wordCount: tsData.wordTimestamps.length,
+                            };
+                            await this.env.PROGRESS_KV.put(
+                                `progress:${jobId}:audio:${index}`,
+                                JSON.stringify({ durationSeconds: result.durationSeconds, completedAt: new Date().toISOString() }),
+                                { expirationTtl: PROGRESS_TTL },
+                            );
+                            return result;
+                        }
+
+                        // Fire-and-forget: Modal returns immediately after spawning
+                        // the GPU work. We poll R2 for the output below.
+                        log("info", "generate-audio: spawning Modal TTS", {
+                            jobId, reelIndex: index, textLength: script.script.length,
                         });
 
                         const response = await fetch(this.env.TTS_API_URL, {
@@ -271,41 +338,50 @@ export class ReelGenerationWorkflow extends WorkflowEntrypoint<
 
                         if (!response.ok) {
                             const errorBody = await response.text();
-                            log("error", "generate-audio: Modal TTS failed", {
-                                jobId,
-                                reelIndex: index,
-                                status: response.status,
-                                error: errorBody.slice(0, 500),
+                            log("error", "generate-audio: Modal spawn request failed", {
+                                jobId, reelIndex: index,
+                                status: response.status, error: errorBody.slice(0, 500),
                             });
                             throw new Error(
-                                `TTS failed for reel ${index}: ${response.status} ${errorBody.slice(0, 200)}`,
+                                `TTS spawn failed for reel ${index}: ${response.status} ${errorBody.slice(0, 200)}`,
                             );
                         }
 
-                        const result = (await response.json()) as {
-                            success: boolean;
-                            audioKey: string;
-                            timestampsKey: string;
+                        // Poll R2 until the timestamps file appears (written last by Modal)
+                        const found = await pollR2ForKey(
+                            this.env.BUCKET, timestampsKey, jobId, `generate-audio-${index}`,
+                        );
+                        if (!found) {
+                            throw new Error(
+                                `TTS for reel ${index} did not produce output within polling window`,
+                            );
+                        }
+
+                        // Read metadata from the timestamps file Modal wrote
+                        const tsObj = await this.env.BUCKET.get(timestampsKey);
+                        if (!tsObj) {
+                            throw new Error(`Timestamps file disappeared: ${timestampsKey}`);
+                        }
+                        const tsData = (await tsObj.json()) as {
+                            wordTimestamps: { word: string; start: number; end: number }[];
                             durationSeconds: number;
-                            wordCount: number;
+                        };
+
+                        const result = {
+                            success: true as const, audioKey, timestampsKey,
+                            durationSeconds: tsData.durationSeconds,
+                            wordCount: tsData.wordTimestamps.length,
                         };
 
                         log("info", "generate-audio: complete", {
-                            jobId,
-                            reelIndex: index,
+                            jobId, reelIndex: index,
                             durationSeconds: result.durationSeconds,
                             wordCount: result.wordCount,
-                            audioKey: result.audioKey,
-                            timestampsKey: result.timestampsKey,
                         });
 
-                        // Progress: mark this reel's audio as done
                         await this.env.PROGRESS_KV.put(
                             `progress:${jobId}:audio:${index}`,
-                            JSON.stringify({
-                                durationSeconds: result.durationSeconds,
-                                completedAt: new Date().toISOString(),
-                            }),
+                            JSON.stringify({ durationSeconds: result.durationSeconds, completedAt: new Date().toISOString() }),
                             { expirationTtl: PROGRESS_TTL },
                         );
 
@@ -336,17 +412,35 @@ export class ReelGenerationWorkflow extends WorkflowEntrypoint<
                     {
                         retries: {
                             limit: 2,
-                            delay: "10 seconds",
+                            delay: "30 seconds",
                             backoff: "exponential",
                         },
                         timeout: "10 minutes",
                     },
                     async () => {
-                        log("info", "composite-video: calling Modal compositor", {
-                            jobId,
-                            reelIndex: index,
+                        const videoKey = `reels/${jobId}/${index}.mp4`;
+
+                        // Idempotency: if output already exists (previous attempt),
+                        // skip the Modal call entirely.
+                        const existingVideo = await this.env.BUCKET.head(videoKey);
+                        if (existingVideo) {
+                            log("info", "composite-video: output already in R2, skipping", {
+                                jobId, reelIndex: index, videoKey,
+                            });
+                            const result = { success: true as const, videoKey };
+                            await this.env.PROGRESS_KV.put(
+                                `progress:${jobId}:video:${index}`,
+                                JSON.stringify({ completedAt: new Date().toISOString() }),
+                                { expirationTtl: PROGRESS_TTL },
+                            );
+                            return result;
+                        }
+
+                        // Fire-and-forget: Modal returns immediately after spawning
+                        // the GPU work. We poll R2 for the output below.
+                        log("info", "composite-video: spawning Modal compositor", {
+                            jobId, reelIndex: index,
                             audioKey: audio.audioKey,
-                            timestampsKey: audio.timestampsKey,
                             durationSeconds: audio.durationSeconds,
                         });
 
@@ -354,12 +448,9 @@ export class ReelGenerationWorkflow extends WorkflowEntrypoint<
                             this.env.VIDEO_COMPOSITOR_URL,
                             {
                                 method: "POST",
-                                headers: {
-                                    "Content-Type": "application/json",
-                                },
+                                headers: { "Content-Type": "application/json" },
                                 body: JSON.stringify({
-                                    api_key:
-                                        this.env.VIDEO_COMPOSITOR_API_KEY,
+                                    api_key: this.env.VIDEO_COMPOSITOR_API_KEY,
                                     job_id: jobId,
                                     reel_index: index,
                                     audio_key: audio.audioKey,
@@ -371,33 +462,31 @@ export class ReelGenerationWorkflow extends WorkflowEntrypoint<
 
                         if (!response.ok) {
                             const errorBody = await response.text();
-                            log(
-                                "error",
-                                "composite-video: Modal compositor failed",
-                                {
-                                    jobId,
-                                    reelIndex: index,
-                                    status: response.status,
-                                    error: errorBody.slice(0, 500),
-                                },
-                            );
+                            log("error", "composite-video: Modal spawn request failed", {
+                                jobId, reelIndex: index,
+                                status: response.status, error: errorBody.slice(0, 500),
+                            });
                             throw new Error(
-                                `Compositor failed for reel ${index}: ${response.status} ${errorBody.slice(0, 200)}`,
+                                `Compositor spawn failed for reel ${index}: ${response.status} ${errorBody.slice(0, 200)}`,
                             );
                         }
 
-                        const result = (await response.json()) as {
-                            success: boolean;
-                            videoKey: string;
-                        };
+                        // Poll R2 until the video file appears
+                        const found = await pollR2ForKey(
+                            this.env.BUCKET, videoKey, jobId, `composite-video-${index}`,
+                        );
+                        if (!found) {
+                            throw new Error(
+                                `Compositor for reel ${index} did not produce output within polling window`,
+                            );
+                        }
+
+                        const result = { success: true as const, videoKey };
 
                         log("info", "composite-video: complete", {
-                            jobId,
-                            reelIndex: index,
-                            videoKey: result.videoKey,
+                            jobId, reelIndex: index, videoKey,
                         });
 
-                        // Progress: mark this reel's video as done
                         await this.env.PROGRESS_KV.put(
                             `progress:${jobId}:video:${index}`,
                             JSON.stringify({ completedAt: new Date().toISOString() }),

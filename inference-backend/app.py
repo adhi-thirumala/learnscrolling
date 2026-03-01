@@ -359,34 +359,25 @@ def speak(body: dict):
         )
     )
 
-    # --- Generate TTS + timestamps + write to R2 ---
+    # --- Fire-and-forget: spawn the GPU work and return immediately ---
+    # The caller (CF Workflow) will poll R2 for the output files instead of
+    # waiting for this HTTP response to carry the result. This avoids the
+    # 120-second Cloudflare Proxy Read Timeout (524) on long TTS jobs.
     tts = PeterGriffinTTS()
-    result = tts.generate_with_timestamps.remote(text, job_id, reel_index)
+    tts.generate_with_timestamps.spawn(text, job_id, reel_index)
 
     logging.info(
         json.dumps(
             {
-                "event": "generate_speech_complete",
+                "event": "generate_speech_spawned",
                 "job_id": job_id,
                 "reel_index": reel_index,
-                "duration_seconds": result["durationSeconds"],
-                "word_count": result["wordCount"],
-                "audio_key": result["audioKey"],
-                "timestamps_key": result["timestampsKey"],
             }
         )
     )
 
     return Response(
-        content=json.dumps(
-            {
-                "success": True,
-                "audioKey": result["audioKey"],
-                "timestampsKey": result["timestampsKey"],
-                "durationSeconds": result["durationSeconds"],
-                "wordCount": result["wordCount"],
-            }
-        ),
+        content=json.dumps({"accepted": True, "job_id": job_id, "reel_index": reel_index}),
         media_type="application/json",
     )
 
