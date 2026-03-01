@@ -236,10 +236,27 @@ api.get("/api/reels/:jobId/:index", async (c) => {
     return c.json({ error: "Reel not found" }, 404);
   }
 
+  // Try to get the generated title for a friendlier filename
+  let filename = `reel-${jobId}-${index}.mp4`;
+  try {
+    const raw = await c.env.PROGRESS_KV.get(`progress:${jobId}`);
+    if (raw) {
+      const progress = JSON.parse(raw);
+      const title = progress?.titles?.[Number(index)];
+      if (title) {
+        const safe = title.replace(/[^a-zA-Z0-9 _-]/g, "").replace(/\s+/g, "_").slice(0, 80);
+        filename = `${safe}.mp4`;
+      }
+    }
+  } catch {
+    // Fall back to generic filename
+  }
+
   log("info", "reel fetch: streaming from R2", {
     jobId,
     reelIndex: index,
     reelKey,
+    filename,
     sizeBytes: object.size,
     durationMs: Date.now() - startTime,
   });
@@ -249,7 +266,7 @@ api.get("/api/reels/:jobId/:index", async (c) => {
       "Content-Type": "video/mp4",
       "Content-Length": String(object.size),
       "Cache-Control": "public, max-age=86400",
-      "Content-Disposition": `inline; filename="reel-${jobId}-${index}.mp4"`,
+      "Content-Disposition": `inline; filename="${filename}"`,
     },
   });
 });

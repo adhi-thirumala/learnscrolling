@@ -219,3 +219,22 @@ we resolves uv sync by takng a version of perth from github which has the correc
 - `scrollToIndex` offset adjusted by +1 because the sticky control bar is now `children[0]` of the scroll container
 - Paused state is cleared when IntersectionObserver auto-plays a new reel (prevents stale play icon overlay on navigated-to reels)
 - All icons are inline SVGs (no icon library dependency) using Feather-style geometry
+
+### Download Filenames Use Generated Titles (2026-03-01)
+- LLM generates a `title` per reel (e.g. "What Even Is Thermodynamics") — these were already stored in KV progress and available in the frontend via `jobProgress.titles`, but never used for downloads
+- Updated three download paths to use the generated title as the filename:
+  1. `App.tsx` "Download All" — `handleDownloadAll` now reads `jobProgress.titles[i]`
+  2. `ReelFeed.tsx` single-reel download — component now accepts `titles?: string[]` prop, uses `titles[currentIndex]`
+  3. `worker/index.ts` Content-Disposition header — reads titles from `PROGRESS_KV` for the reel proxy endpoint
+- All three use a `safeFilename()` helper: strips non-alphanumeric chars (keeps spaces, hyphens, underscores), collapses whitespace to underscores, truncates to 80 chars
+- Falls back to generic `reel-N.mp4` if no title is available
+
+### Video Preloading for Instant Playback (2026-03-01)
+- Videos had `preload="metadata"` — browser only fetched headers, so scrolling to a new reel caused a visible loading delay while the video streamed from the network
+- Fix: on mount, fetch all reel videos as blobs in parallel via `fetch().then(r => r.blob())`, create `URL.createObjectURL()` for each, and use those as the video `src`
+- Blob URLs mean the entire video is in browser memory — scrolling between reels is instant with zero network latency
+- Shows a spinner with "Loading reels... 3/5" progress while preloading; feed renders only after all blobs are ready
+- Falls back to the network URL if a blob fetch fails (e.g. network error on one reel doesn't block the rest)
+- `preload` attribute changed from `"metadata"` to `"auto"` as a belt-and-suspenders measure
+- Blob URLs are revoked on unmount via the useEffect cleanup to avoid memory leaks
+- Safe for typical reel counts (3-7 reels at ~5-15 MB each = 15-100 MB in memory)

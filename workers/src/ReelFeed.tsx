@@ -7,9 +7,13 @@ interface Reel {
 
 interface ReelFeedProps {
     reels: Reel[];
+    titles?: string[];
 }
 
-export default function ReelFeed({ reels }: ReelFeedProps) {
+const safeFilename = (title: string) =>
+    title.replace(/[^a-zA-Z0-9 _-]/g, "").replace(/\s+/g, "_").slice(0, 80);
+
+export default function ReelFeed({ reels, titles }: ReelFeedProps) {
     const containerRef = useRef<HTMLDivElement>(null);
     const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
     const currentIndexRef = useRef(0);
@@ -17,6 +21,42 @@ export default function ReelFeed({ reels }: ReelFeedProps) {
     const [muted, setMuted] = useState(false);
     const [paused, setPaused] = useState<Record<number, boolean>>({});
     const [isFullscreen, setIsFullscreen] = useState(false);
+
+    // Preload all videos as blobs into memory for instant playback
+    const [blobUrls, setBlobUrls] = useState<Record<number, string>>({});
+    const [preloadCount, setPreloadCount] = useState(0);
+    const blobUrlsRef = useRef<Record<number, string>>({});
+
+    useEffect(() => {
+        if (reels.length === 0) return;
+
+        let cancelled = false;
+        const urls: string[] = [];
+
+        reels.forEach((reel, i) => {
+            fetch(reel.url)
+                .then((r) => r.blob())
+                .then((blob) => {
+                    if (cancelled) return;
+                    const url = URL.createObjectURL(blob);
+                    urls.push(url);
+                    blobUrlsRef.current = { ...blobUrlsRef.current, [i]: url };
+                    setBlobUrls((prev) => ({ ...prev, [i]: url }));
+                    setPreloadCount((c) => c + 1);
+                })
+                .catch(() => {
+                    // Fall back to network URL on failure
+                    if (!cancelled) setPreloadCount((c) => c + 1);
+                });
+        });
+
+        return () => {
+            cancelled = true;
+            urls.forEach((u) => URL.revokeObjectURL(u));
+        };
+    }, [reels]);
+
+    const allLoaded = preloadCount >= reels.length;
 
     // Scroll the container to a specific reel index
     // +1 offset because children[0] is the sticky control bar
@@ -179,12 +219,17 @@ export default function ReelFeed({ reels }: ReelFeedProps) {
                             if (!url) { e.preventDefault(); return; }
                             // Force download via blob to avoid navigating away
                             e.preventDefault();
+                            const idx = currentIndexRef.current;
                             fetch(url)
                                 .then((r) => r.blob())
                                 .then((blob) => {
+                                    const title = titles?.[idx];
+                                    const filename = title
+                                        ? `${safeFilename(title)}.mp4`
+                                        : `reel-${idx + 1}.mp4`;
                                     const a = document.createElement("a");
                                     a.href = URL.createObjectURL(blob);
-                                    a.download = `reel-${currentIndexRef.current + 1}.mp4`;
+                                    a.download = filename;
                                     a.click();
                                     URL.revokeObjectURL(a.href);
                                 })
@@ -224,7 +269,17 @@ export default function ReelFeed({ reels }: ReelFeedProps) {
                 </div>
             </div>
 
-            {reels.map((reel, i) => (
+            {/* Loading indicator while videos are being preloaded */}
+            {!allLoaded && (
+                <div className="h-full snap-start snap-always flex flex-col items-center justify-center bg-black text-white gap-3">
+                    <div className="w-10 h-10 border-3 border-white/30 border-t-white rounded-full animate-spin" />
+                    <span className="text-sm text-white/70">
+                        Loading reels... {preloadCount}/{reels.length}
+                    </span>
+                </div>
+            )}
+
+            {allLoaded && reels.map((reel, i) => (
                 <div
                     key={reel.index}
                     className="h-full snap-start snap-always flex items-center justify-center bg-black relative"
@@ -233,10 +288,10 @@ export default function ReelFeed({ reels }: ReelFeedProps) {
                         ref={(el) => {
                             videoRefs.current[i] = el;
                         }}
-                        src={reel.url}
+                        src={blobUrls[i] ?? reel.url}
                         playsInline
                         loop
-                        preload="metadata"
+                        preload="auto"
                         className="h-full max-w-full object-contain cursor-pointer"
                         onClick={() => handleVideoClick(i)}
                     />
