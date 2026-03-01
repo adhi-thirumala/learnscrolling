@@ -57,24 +57,24 @@ import OpenAI from "openai";
 // --- Types ---
 
 export interface ReelScript {
-  /** 0-based reel number */
-  index: number;
-  /** Short catchy title for this reel */
-  title: string;
-  /** The narration text (~150 words, ~60 seconds of speech) */
-  script: string;
-  /** Which part of the source document this covers */
-  sourceSection: string;
+    /** 0-based reel number */
+    index: number;
+    /** Short catchy title for this reel */
+    title: string;
+    /** The narration text (~150 words, ~60 seconds of speech) */
+    script: string;
+    /** Which part of the source document this covers */
+    sourceSection: string;
 }
 
 export interface LLMResponse {
-  reels: ReelScript[];
+    reels: ReelScript[];
 }
 
 export interface LLMConfig {
-  apiUrl: string;
-  apiKey: string;
-  model: string;
+    apiUrl: string;
+    apiKey: string;
+    model: string;
 }
 
 // --- System Prompt ---
@@ -86,10 +86,10 @@ You will receive the full text of a document (textbook chapter, paper, notes, et
 1. Read and understand ALL the content.
 2. Identify natural topic boundaries (chapters, sections, key concepts).
 3. Break the content into a series of short reel scripts — one reel per major topic or concept.
-4. Write each script as a ~150 word narration that Peter Griffin would speak aloud.
+4. Write each script as a ~200 word narration that Peter Griffin would speak aloud.
 
 SCRIPT RULES:
-- Each script should be roughly 150 words (targeting ~60 seconds of speech at 150 wpm).
+- Each script should be roughly 200 words (targeting ~60 seconds of speech at 200 wpm).
 - Write ONLY the spoken words. No stage directions, no "[laughs]", no "(pauses)", no speaker labels.
 - Be genuinely educational — the viewer should actually learn the concept.
 - Be funny and engaging in Peter Griffin's voice:
@@ -129,23 +129,23 @@ Example output structure:
 // --- Helpers ---
 
 function log(
-  level: "info" | "warn" | "error",
-  msg: string,
-  data?: Record<string, unknown>,
+    level: "info" | "warn" | "error",
+    msg: string,
+    data?: Record<string, unknown>,
 ) {
-  const entry = {
-    timestamp: new Date().toISOString(),
-    level,
-    msg,
-    ...data,
-  };
-  if (level === "error") {
-    console.error(JSON.stringify(entry));
-  } else if (level === "warn") {
-    console.warn(JSON.stringify(entry));
-  } else {
-    console.log(JSON.stringify(entry));
-  }
+    const entry = {
+        timestamp: new Date().toISOString(),
+        level,
+        msg,
+        ...data,
+    };
+    if (level === "error") {
+        console.error(JSON.stringify(entry));
+    } else if (level === "warn") {
+        console.warn(JSON.stringify(entry));
+    } else {
+        console.log(JSON.stringify(entry));
+    }
 }
 
 // --- JSON Schema for structured output ---
@@ -154,133 +154,133 @@ function log(
 // the model literally cannot produce output that doesn't match.
 
 const REEL_SCRIPTS_SCHEMA = {
-  type: "object",
-  properties: {
-    reels: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          index: {
-            type: "integer",
-            description: "0-based sequential reel number",
-          },
-          title: {
-            type: "string",
-            description: "Short catchy title for this reel (max ~8 words)",
-          },
-          script: {
-            type: "string",
-            description:
-              "The narration text (~150 words, ~60 seconds of speech). ONLY spoken words, no stage directions.",
-          },
-          sourceSection: {
-            type: "string",
-            description:
-              'Which part of the source document this covers (e.g. "Chapter 2, Section 2.3")',
-          },
+    type: "object",
+    properties: {
+        reels: {
+            type: "array",
+            items: {
+                type: "object",
+                properties: {
+                    index: {
+                        type: "integer",
+                        description: "0-based sequential reel number",
+                    },
+                    title: {
+                        type: "string",
+                        description: "Short catchy title for this reel (max ~8 words)",
+                    },
+                    script: {
+                        type: "string",
+                        description:
+                            "The narration text (~150 words, ~60 seconds of speech). ONLY spoken words, no stage directions.",
+                    },
+                    sourceSection: {
+                        type: "string",
+                        description:
+                            'Which part of the source document this covers (e.g. "Chapter 2, Section 2.3")',
+                    },
+                },
+                required: ["index", "title", "script", "sourceSection"],
+                additionalProperties: false,
+            },
         },
-        required: ["index", "title", "script", "sourceSection"],
-        additionalProperties: false,
-      },
     },
-  },
-  required: ["reels"],
-  additionalProperties: false,
+    required: ["reels"],
+    additionalProperties: false,
 } as const;
 
 // --- LLM Client ---
 
 export async function generateScripts(
-  text: string,
-  config: LLMConfig,
+    text: string,
+    config: LLMConfig,
 ): Promise<ReelScript[]> {
-  const { apiUrl, apiKey, model } = config;
+    const { apiUrl, apiKey, model } = config;
 
-  const trimmedApiUrl = apiUrl?.trim();
-  const trimmedApiKey = apiKey?.trim();
-  const trimmedModel = model?.trim();
+    const trimmedApiUrl = apiUrl?.trim();
+    const trimmedApiKey = apiKey?.trim();
+    const trimmedModel = model?.trim();
 
-  if (!trimmedApiUrl) {
-    log("error", "llm: missing or empty apiUrl in configuration", {});
-    throw new Error("Invalid LLM configuration: apiUrl is missing or empty");
-  }
+    if (!trimmedApiUrl) {
+        log("error", "llm: missing or empty apiUrl in configuration", {});
+        throw new Error("Invalid LLM configuration: apiUrl is missing or empty");
+    }
 
-  if (!trimmedApiKey) {
-    log("error", "llm: missing or empty apiKey in configuration", {});
-    throw new Error("Invalid LLM configuration: apiKey is missing or empty");
-  }
+    if (!trimmedApiKey) {
+        log("error", "llm: missing or empty apiKey in configuration", {});
+        throw new Error("Invalid LLM configuration: apiKey is missing or empty");
+    }
 
-  if (!trimmedModel) {
-    log("error", "llm: missing or empty model in configuration", {});
-    throw new Error("Invalid LLM configuration: model is missing or empty");
-  }
+    if (!trimmedModel) {
+        log("error", "llm: missing or empty model in configuration", {});
+        throw new Error("Invalid LLM configuration: model is missing or empty");
+    }
 
-  log("info", "llm: sending request", {
-    model: trimmedModel,
-    apiUrl: trimmedApiUrl,
-    inputLengthChars: text.length,
-  });
-
-  const client = new OpenAI({
-    baseURL: `${trimmedApiUrl.replace(/\/$/, "")}/v1`,
-    apiKey: trimmedApiKey,
-  });
-
-  const completion = await client.chat.completions.create({
-    model: trimmedModel,
-    model,
-    messages: [
-      { role: "system", content: SYSTEM_PROMPT },
-      { role: "user", content: text },
-    ],
-    response_format: {
-      type: "json_schema",
-      json_schema: {
-        name: "reel_scripts",
-        strict: true,
-        schema: REEL_SCRIPTS_SCHEMA,
-      },
-    },
-    temperature: 0.9,
-  });
-
-  const content = completion.choices?.[0]?.message?.content;
-  if (!content) {
-    log("error", "llm: empty response", {
-      finishReason: completion.choices?.[0]?.finish_reason,
-      usage: completion.usage as unknown as Record<string, unknown>,
+    log("info", "llm: sending request", {
+        model: trimmedModel,
+        apiUrl: trimmedApiUrl,
+        inputLengthChars: text.length,
     });
-    throw new Error("LLM returned an empty response");
-  }
 
-  // Schema enforcement guarantees valid JSON + correct shape,
-  // but we still parse defensively in case of edge cases.
-  let parsed: LLMResponse;
-  try {
-    parsed = JSON.parse(content) as LLMResponse;
-  } catch {
-    log("error", "llm: invalid JSON despite schema enforcement", {
-      content: content.slice(0, 500),
+    const client = new OpenAI({
+        baseURL: `${trimmedApiUrl.replace(/\/$/, "")}/v1`,
+        apiKey: trimmedApiKey,
     });
-    throw new Error("LLM response was not valid JSON");
-  }
 
-  if (!Array.isArray(parsed.reels) || parsed.reels.length === 0) {
-    log("error", "llm: no reels in response", {
-      parsed: JSON.stringify(parsed).slice(0, 500),
+    const completion = await client.chat.completions.create({
+        model: trimmedModel,
+        model,
+        messages: [
+            { role: "system", content: SYSTEM_PROMPT },
+            { role: "user", content: text },
+        ],
+        response_format: {
+            type: "json_schema",
+            json_schema: {
+                name: "reel_scripts",
+                strict: true,
+                schema: REEL_SCRIPTS_SCHEMA,
+            },
+        },
+        temperature: 0.9,
     });
-    throw new Error("LLM response contained no reels");
-  }
 
-  log("info", "llm: scripts generated", {
-    totalReels: parsed.reels.length,
-    avgScriptLength: Math.round(
-      parsed.reels.reduce((sum, r) => sum + r.script.length, 0) /
-        parsed.reels.length,
-    ),
-    usage: completion.usage as unknown as Record<string, unknown>,
-  });
+    const content = completion.choices?.[0]?.message?.content;
+    if (!content) {
+        log("error", "llm: empty response", {
+            finishReason: completion.choices?.[0]?.finish_reason,
+            usage: completion.usage as unknown as Record<string, unknown>,
+        });
+        throw new Error("LLM returned an empty response");
+    }
 
-  return parsed.reels;
+    // Schema enforcement guarantees valid JSON + correct shape,
+    // but we still parse defensively in case of edge cases.
+    let parsed: LLMResponse;
+    try {
+        parsed = JSON.parse(content) as LLMResponse;
+    } catch {
+        log("error", "llm: invalid JSON despite schema enforcement", {
+            content: content.slice(0, 500),
+        });
+        throw new Error("LLM response was not valid JSON");
+    }
+
+    if (!Array.isArray(parsed.reels) || parsed.reels.length === 0) {
+        log("error", "llm: no reels in response", {
+            parsed: JSON.stringify(parsed).slice(0, 500),
+        });
+        throw new Error("LLM response contained no reels");
+    }
+
+    log("info", "llm: scripts generated", {
+        totalReels: parsed.reels.length,
+        avgScriptLength: Math.round(
+            parsed.reels.reduce((sum, r) => sum + r.script.length, 0) /
+            parsed.reels.length,
+        ),
+        usage: completion.usage as unknown as Record<string, unknown>,
+    });
+
+    return parsed.reels;
 }

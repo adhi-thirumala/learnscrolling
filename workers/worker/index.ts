@@ -86,18 +86,110 @@ api.post("/api/upload", async (c) => {
   });
 });
 
-// GET /api/status/:id -- job status (stub)
+// GET /api/status/:id -- job status via Workflow API
 api.get("/api/status/:id", async (c) => {
   const jobId = c.req.param("id");
-  log("info", "status check (stubbed)", { jobId });
-  return c.json(
-    {
+  const startTime = Date.now();
+  log("info", "status check", { jobId });
+
+  try {
+    const instance = await c.env.REEL_WORKFLOW.get(jobId);
+    const instanceStatus = await instance.status();
+
+    log("info", "status check: got workflow status", {
       jobId,
-      status: "not_implemented",
-      message: "Job status tracking is not yet implemented.",
+      status: instanceStatus.status,
+      durationMs: Date.now() - startTime,
+    });
+
+    // Build response based on workflow status
+    const response: {
+      jobId: string;
+      status: string;
+      reels?: { index: number; url: string }[];
+      error?: string;
+    } = {
+      jobId,
+      status: instanceStatus.status,
+    };
+
+    // When workflow is complete, extract video keys from the output and
+    // return URLs that point to our /api/reels proxy endpoint.
+    if (instanceStatus.status === "complete" && instanceStatus.output) {
+      const output = instanceStatus.output as {
+        videoResults?: { videoKey: string }[];
+      };
+      if (output.videoResults && Array.isArray(output.videoResults)) {
+        response.reels = output.videoResults.map(
+          (v: { videoKey: string }, i: number) => ({
+            index: i,
+            url: `/api/reels/${jobId}/${i}`,
+          }),
+        );
+        log("info", "status check: returning reel URLs", {
+          jobId,
+          reelCount: response.reels.length,
+        });
+      }
+    }
+
+    if (instanceStatus.status === "errored") {
+      response.error =
+        instanceStatus.error instanceof Error
+          ? instanceStatus.error.message
+          : String(instanceStatus.error ?? "Unknown error");
+      log("warn", "status check: workflow errored", {
+        jobId,
+        error: response.error,
+      });
+    }
+
+    return c.json(response);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    log("error", "status check: failed to get workflow instance", {
+      jobId,
+      error: message,
+    });
+    return c.json(
+      { jobId, status: "not_found", error: "Job not found" },
+      404,
+    );
+  }
+});
+
+// GET /api/reels/:jobId/:index -- proxy video file from R2
+api.get("/api/reels/:jobId/:index", async (c) => {
+  const jobId = c.req.param("jobId");
+  const index = c.req.param("index");
+  const startTime = Date.now();
+
+  log("info", "reel fetch", { jobId, reelIndex: index });
+
+  const reelKey = `reels/${jobId}/${index}.mp4`;
+  const object = await c.env.BUCKET.get(reelKey);
+
+  if (!object) {
+    log("warn", "reel fetch: not found in R2", { jobId, reelIndex: index, reelKey });
+    return c.json({ error: "Reel not found" }, 404);
+  }
+
+  log("info", "reel fetch: streaming from R2", {
+    jobId,
+    reelIndex: index,
+    reelKey,
+    sizeBytes: object.size,
+    durationMs: Date.now() - startTime,
+  });
+
+  return new Response(object.body, {
+    headers: {
+      "Content-Type": "video/mp4",
+      "Content-Length": String(object.size),
+      "Cache-Control": "public, max-age=86400",
+      "Content-Disposition": `inline; filename="reel-${jobId}-${index}.mp4"`,
     },
-    501,
-  );
+  });
 });
 
 // --- Entrypoint ---

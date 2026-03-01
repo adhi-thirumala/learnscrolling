@@ -12,6 +12,12 @@
   "observability": {
     "enabled": true
   },
+  "kv_namespaces": [
+    {
+      "binding": "PROGRESS_KV",
+      "id": "1c957994e36441c681acdf24852cf809"
+    }
+  ],
   "r2_buckets": [
     {
       "binding": "BUCKET",
@@ -26,7 +32,9 @@
     }
   ],
   "vars": {
-    "LLM_API_URL": "http://localhost:8000",
-    "LLM_MODEL": "peter-griffin-brainrot"
+    "LLM_API_URL": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "LLM_MODEL": "gemini-3-flash-preview",
+    "TTS_API_URL": "https://adhi-thirumala--peter-griffin-chatterbox-speak.modal.run/",
+    "VIDEO_COMPOSITOR_URL": "https://adhi-thirumala--learnscrolling-compositor-composite-video.modal.run"
   }
 }

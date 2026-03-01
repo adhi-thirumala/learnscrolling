@@ -7,12 +7,12 @@ requires-python = ">=3.11"
 dependencies = [
     "chatterbox-tts>=0.1.6",
     "resemble-perth @ git+https://github.com/resemble-ai/Perth.git",
-    "fastapi>=0.134.0",
+    "fastapi[standard]>=0.134.0",
     "huggingface-hub>=0.36.2",
     "modal>=1.3.4",
     "peft>=0.18.1",
     "torch>=2.6.0",
     "torchaudio>=2.6.0",
     "transformers>=4.46.3",
-    "openai-whisper>=20240930"
+    "openai-whisper>=20240930",
 ]

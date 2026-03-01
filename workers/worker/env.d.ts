@@ -3,5 +3,10 @@
 declare namespace Cloudflare {
   interface Env {
     LLM_API_KEY: string;
+    TTS_API_URL: string;
+    TTS_API_KEY: string;
+    VIDEO_COMPOSITOR_URL: string;
+    VIDEO_COMPOSITOR_API_KEY: string;
+    PROGRESS_KV: KVNamespace;
   }
 }

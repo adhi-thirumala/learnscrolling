@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 
 type UploadStatus = "idle" | "uploading" | "done" | "error";
 
@@ -9,6 +9,22 @@ interface UploadState {
     jobId: string | null;
 }
 
+type JobPhase = "queued" | "running" | "complete" | "errored" | "unknown";
+
+interface Reel {
+    index: number;
+    url: string;
+}
+
+// Phase label mapping for display
+const PHASE_LABELS: Record<JobPhase, string> = {
+    queued: "Queued",
+    running: "Processing",
+    complete: "Complete",
+    errored: "Failed",
+    unknown: "",
+};
+
 export default function App() {
     const [upload, setUpload] = useState<UploadState>({
         status: "idle",
@@ -18,6 +34,12 @@ export default function App() {
     });
     const [dragOver, setDragOver] = useState(false);
     const fileInputRef = useRef<HTMLInputElement>(null);
+
+    // Job polling state
+    const [jobPhase, setJobPhase] = useState<JobPhase>("unknown");
+    const [reels, setReels] = useState<Reel[]>([]);
+    const [jobError, setJobError] = useState<string | null>(null);
+    const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
     const handleFile = useCallback((file: File) => {
         if (file.type !== "application/pdf") {
@@ -129,10 +151,80 @@ export default function App() {
         }
     }, [upload.file]);
 
-    const reset = useCallback(() => {
-        setUpload({ status: "idle", file: null, message: "", jobId: null });
-        if (fileInputRef.current) fileInputRef.current.value = "";
+    const stopPolling = useCallback(() => {
+        if (pollingRef.current) {
+            clearInterval(pollingRef.current);
+            pollingRef.current = null;
+        }
     }, []);
+
+    const reset = useCallback(() => {
+        stopPolling();
+        setUpload({ status: "idle", file: null, message: "", jobId: null });
+        setJobPhase("unknown");
+        setReels([]);
+        setJobError(null);
+        if (fileInputRef.current) fileInputRef.current.value = "";
+    }, [stopPolling]);
+
+    // Poll for job status once we have a jobId
+    const pollJob = useCallback(
+        async (jobId: string) => {
+            try {
+                const res = await fetch(`/api/status/${jobId}`);
+                if (!res.ok) return;
+                const data = (await res.json()) as {
+                    status: string;
+                    reels?: Reel[];
+                    error?: string;
+                };
+
+                // Map workflow status string to our phase
+                let phase: JobPhase = "unknown";
+                if (data.status === "queued") phase = "queued";
+                else if (data.status === "running") phase = "running";
+                else if (data.status === "complete") phase = "complete";
+                else if (
+                    data.status === "errored" ||
+                    data.status === "terminated"
+                )
+                    phase = "errored";
+
+                setJobPhase(phase);
+
+                if (phase === "complete" && data.reels) {
+                    setReels(data.reels);
+                    stopPolling();
+                }
+
+                if (phase === "errored") {
+                    setJobError(data.error ?? "Processing failed");
+                    stopPolling();
+                }
+            } catch {
+                // Network error -- keep polling
+            }
+        },
+        [stopPolling],
+    );
+
+    // Start polling when upload completes
+    useEffect(() => {
+        if (upload.status === "done" && upload.jobId) {
+            setJobPhase("queued");
+            setReels([]);
+            setJobError(null);
+
+            // Poll immediately, then every 5 seconds
+            pollJob(upload.jobId);
+            pollingRef.current = setInterval(
+                () => pollJob(upload.jobId!),
+                5000,
+            );
+        }
+
+        return () => stopPolling();
+    }, [upload.status, upload.jobId, pollJob, stopPolling]);
 
     const formatSize = (bytes: number) => {
         if (bytes < 1024) return `${bytes} B`;
@@ -310,7 +402,7 @@ export default function App() {
                         )}
                     </div>
 
-                    {/* Status */}
+                    {/* Upload Status */}
                     {upload.message && (
                         <div
                             className={`rounded-xl px-4 py-3 text-sm ${upload.status === "error"
@@ -326,6 +418,88 @@ export default function App() {
                                     Job ID: {upload.jobId}
                                 </span>
                             )}
+                        </div>
+                    )}
+
+                    {/* Job Progress */}
+                    {upload.status === "done" && jobPhase !== "unknown" && jobPhase !== "complete" && (
+                        <div className="rounded-xl border border-border-subtle bg-surface-raised px-4 py-4 space-y-3">
+                            <div className="flex items-center gap-3">
+                                {jobPhase === "errored" ? (
+                                    <div className="size-5 rounded-full bg-red-500/20 flex items-center justify-center">
+                                        <svg className="size-3 text-red-400" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor">
+                                            <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                        </svg>
+                                    </div>
+                                ) : (
+                                    <svg className="animate-spin size-5 text-green-mid" viewBox="0 0 24 24" fill="none">
+                                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+                                    </svg>
+                                )}
+                                <div>
+                                    <p className={`text-sm font-medium ${jobPhase === "errored" ? "text-red-400" : "text-neutral-200"}`}>
+                                        {PHASE_LABELS[jobPhase]}
+                                    </p>
+                                    {jobPhase === "errored" && jobError && (
+                                        <p className="text-xs text-red-400/70 mt-0.5">{jobError}</p>
+                                    )}
+                                    {jobPhase !== "errored" && (
+                                        <p className="text-xs text-neutral-500 mt-0.5">
+                                            {jobPhase === "queued"
+                                                ? "Waiting to start..."
+                                                : "Generating your reels... This may take a few minutes."}
+                                        </p>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Completed Reels */}
+                    {reels.length > 0 && (
+                        <div className="space-y-4">
+                            <div className="flex items-center gap-2">
+                                <div className="size-5 rounded-full bg-green-start/20 flex items-center justify-center">
+                                    <svg className="size-3 text-green-mid" fill="none" viewBox="0 0 24 24" strokeWidth={2.5} stroke="currentColor">
+                                        <path strokeLinecap="round" strokeLinejoin="round" d="M4.5 12.75l6 6 9-13.5" />
+                                    </svg>
+                                </div>
+                                <h3 className="text-sm font-medium text-neutral-200">
+                                    {reels.length} {reels.length === 1 ? "Reel" : "Reels"} Ready
+                                </h3>
+                            </div>
+
+                            <div className="grid gap-4">
+                                {reels.map((reel) => (
+                                    <div
+                                        key={reel.index}
+                                        className="rounded-xl border border-border-subtle bg-surface-raised overflow-hidden"
+                                    >
+                                        <div className="px-4 py-2 border-b border-border-subtle flex items-center justify-between">
+                                            <span className="text-xs font-medium text-neutral-400">
+                                                Reel {reel.index + 1}
+                                            </span>
+                                            <a
+                                                href={reel.url}
+                                                download={`reel-${reel.index + 1}.mp4`}
+                                                className="text-xs text-green-mid hover:text-green-end transition-colors"
+                                            >
+                                                Download
+                                            </a>
+                                        </div>
+                                        <div className="aspect-[9/16] max-h-[600px] bg-black flex items-center justify-center">
+                                            <video
+                                                src={reel.url}
+                                                controls
+                                                playsInline
+                                                preload="metadata"
+                                                className="w-full h-full object-contain"
+                                            />
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     )}
                 </div>
