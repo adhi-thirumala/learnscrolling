@@ -78,7 +78,7 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,DejaVu Sans,72,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,2,40,40,200,1
+Style: Default,DejaVu Sans,72,&H00FFFFFF,&H0000FFFF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,4,2,8,40,40,100,1
 
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
@@ -89,8 +89,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     # BackColour: semi-transparent black shadow
     # Bold: -1 (true)
     # Outline: 4px, Shadow: 2px
-    # Alignment: 2 (bottom center)
-    # MarginV: 200 (push up from very bottom)
+    # Alignment: 8 (top center)
+    # MarginV: 100 (push down from very top)
 
     # Group words into lines
     lines = []
@@ -248,8 +248,8 @@ def composite(
         # 5. Run FFmpeg composite
         # Filter graph:
         #   - Scale/crop Minecraft to 1080x1920 (vertical)
-        #   - Scale Peter Griffin PNG to 300px wide
-        #   - Overlay Peter Griffin at bottom-left
+        #   - Scale Peter Griffin PNG to 450px wide
+        #   - Overlay Peter Griffin at bottom-center-left
         #   - Burn in ASS subtitles
         # Encode with T4 NVENC for GPU-accelerated H.264
         ffmpeg_cmd = [
@@ -268,8 +268,8 @@ def composite(
             (
                 "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
                 "crop=1080:1920[bg];"
-                "[2:v]scale=300:-1[pg];"
-                "[bg][pg]overlay=x=50:y=H-h-50[v];"
+                "[2:v]scale=450:-1[pg];"
+                "[bg][pg]overlay=x=150:y=H-h-50[v];"
                 f"[v]ass={ass_path}[out]"
             ),
             "-map",
