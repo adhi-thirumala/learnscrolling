@@ -65,8 +65,13 @@ def generate_ass_subtitles(
 ) -> str:
     """Generate an ASS subtitle file with TikTok-style word-by-word karaoke highlighting.
 
-    Uses \\k tags for per-word timing. Each line shows a group of words,
-    with the current word highlighted as it's spoken.
+    Uses \\k tags for per-word timing. Words are grouped into subtitle lines of
+    `words_per_line` words each, but a new line is forced whenever the speaker
+    changes. Each subtitle line that starts a new speaker run is prefixed with
+    [Peter]: or [Stewie]: so the viewer knows who is talking.
+
+    If word timestamps don't contain a "speaker" key, falls back to the
+    original behavior (no speaker prefix).
     """
     header = f"""[Script Info]
 Title: LearnScrolling Subtitles
@@ -92,13 +97,65 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     # Alignment: 8 (top center)
     # MarginV: 100 (push down from very top)
 
-    # Group words into lines
-    lines = []
-    for i in range(0, len(word_timestamps), words_per_line):
-        lines.append(word_timestamps[i : i + words_per_line])
+    has_speakers = any("speaker" in w for w in word_timestamps)
 
+    # --- Group words into subtitle lines ---
+    # Rules:
+    #   1. Force a new line whenever the speaker changes
+    #   2. Within a single speaker run, group into `words_per_line` words
+    #   3. The first line of each speaker run gets a [Speaker]: prefix
+    lines: list[
+        dict
+    ] = []  # Each entry: {"words": [...], "speaker": str|None, "is_first_of_run": bool}
+    current_speaker = None
+    current_words: list[dict] = []
+    is_first_of_run = True
+
+    for w in word_timestamps:
+        speaker = w.get("speaker") if has_speakers else None
+
+        # Speaker changed — flush current line and start new speaker run
+        if has_speakers and speaker != current_speaker:
+            if current_words:
+                lines.append(
+                    {
+                        "words": current_words,
+                        "speaker": current_speaker,
+                        "is_first_of_run": is_first_of_run,
+                    }
+                )
+            current_words = []
+            current_speaker = speaker
+            is_first_of_run = True
+
+        current_words.append(w)
+
+        # Hit words_per_line limit — flush
+        if len(current_words) >= words_per_line:
+            lines.append(
+                {
+                    "words": current_words,
+                    "speaker": current_speaker,
+                    "is_first_of_run": is_first_of_run,
+                }
+            )
+            current_words = []
+            is_first_of_run = False
+
+    # Flush remaining words
+    if current_words:
+        lines.append(
+            {
+                "words": current_words,
+                "speaker": current_speaker,
+                "is_first_of_run": is_first_of_run,
+            }
+        )
+
+    # --- Build ASS dialogue events ---
     events = ""
-    for line_words in lines:
+    for line in lines:
+        line_words = line["words"]
         if not line_words:
             continue
 
@@ -108,6 +165,11 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         # Build karaoke text with \k tags
         # \k duration is in centiseconds (1/100th of a second)
         text_parts = []
+
+        # Add speaker prefix if this is the first line of a new speaker run
+        if has_speakers and line["is_first_of_run"] and line["speaker"]:
+            text_parts.append(f"[{line['speaker']}]:")
+
         for w in line_words:
             duration_cs = max(1, int((w["end"] - w["start"]) * 100))
             text_parts.append(f"{{\\k{duration_cs}}}{w['word']}")
