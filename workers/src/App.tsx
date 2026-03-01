@@ -16,14 +16,38 @@ interface Reel {
     url: string;
 }
 
-// Phase label mapping for display
-const PHASE_LABELS: Record<JobPhase, string> = {
-    queued: "Queued",
-    running: "Processing",
-    complete: "Complete",
-    errored: "Failed",
-    unknown: "",
-};
+interface JobProgress {
+    phase: string;
+    totalPages?: number;
+    totalReels?: number;
+    titles?: string[];
+    audioCompleted: number;
+    videoCompleted: number;
+}
+
+function progressMessage(progress: JobProgress | null, phase: JobPhase): string {
+    if (!progress) {
+        return phase === "queued" ? "Waiting to start..." : "Processing...";
+    }
+    switch (progress.phase) {
+        case "parsing":
+            return "Parsing your PDF...";
+        case "parsed":
+            return `Extracted ${progress.totalPages ?? "?"} pages. Generating scripts...`;
+        case "generating_audio":
+            return progress.totalReels
+                ? `Generating audio... ${progress.audioCompleted}/${progress.totalReels}`
+                : "Generating audio...";
+        case "compositing_video":
+            return progress.totalReels
+                ? `Compositing videos... ${progress.videoCompleted}/${progress.totalReels}`
+                : "Compositing videos...";
+        case "complete":
+            return `Done! ${progress.totalReels ?? ""} reels ready.`;
+        default:
+            return "Processing...";
+    }
+}
 
 export default function App() {
     const [upload, setUpload] = useState<UploadState>({
@@ -37,6 +61,7 @@ export default function App() {
 
     // Job polling state
     const [jobPhase, setJobPhase] = useState<JobPhase>("unknown");
+    const [jobProgress, setJobProgress] = useState<JobProgress | null>(null);
     const [reels, setReels] = useState<Reel[]>([]);
     const [jobError, setJobError] = useState<string | null>(null);
     const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -162,6 +187,7 @@ export default function App() {
         stopPolling();
         setUpload({ status: "idle", file: null, message: "", jobId: null });
         setJobPhase("unknown");
+        setJobProgress(null);
         setReels([]);
         setJobError(null);
         if (fileInputRef.current) fileInputRef.current.value = "";
@@ -175,6 +201,7 @@ export default function App() {
                 if (!res.ok) return;
                 const data = (await res.json()) as {
                     status: string;
+                    progress: JobProgress | null;
                     reels?: Reel[];
                     error?: string;
                 };
@@ -191,6 +218,7 @@ export default function App() {
                     phase = "errored";
 
                 setJobPhase(phase);
+                setJobProgress(data.progress);
 
                 if (phase === "complete" && data.reels) {
                     setReels(data.reels);
@@ -212,14 +240,15 @@ export default function App() {
     useEffect(() => {
         if (upload.status === "done" && upload.jobId) {
             setJobPhase("queued");
+            setJobProgress(null);
             setReels([]);
             setJobError(null);
 
-            // Poll immediately, then every 5 seconds
+            // Poll immediately, then every 3 seconds
             pollJob(upload.jobId);
             pollingRef.current = setInterval(
                 () => pollJob(upload.jobId!),
-                5000,
+                3000,
             );
         }
 
@@ -438,17 +467,16 @@ export default function App() {
                                     </svg>
                                 )}
                                 <div>
-                                    <p className={`text-sm font-medium ${jobPhase === "errored" ? "text-red-400" : "text-neutral-200"}`}>
-                                        {PHASE_LABELS[jobPhase]}
-                                    </p>
-                                    {jobPhase === "errored" && jobError && (
-                                        <p className="text-xs text-red-400/70 mt-0.5">{jobError}</p>
-                                    )}
-                                    {jobPhase !== "errored" && (
-                                        <p className="text-xs text-neutral-500 mt-0.5">
-                                            {jobPhase === "queued"
-                                                ? "Waiting to start..."
-                                                : "Generating your reels... This may take a few minutes."}
+                                    {jobPhase === "errored" ? (
+                                        <>
+                                            <p className="text-sm font-medium text-red-400">Failed</p>
+                                            {jobError && (
+                                                <p className="text-xs text-red-400/70 mt-0.5">{jobError}</p>
+                                            )}
+                                        </>
+                                    ) : (
+                                        <p className="text-sm font-medium text-neutral-200">
+                                            {progressMessage(jobProgress, jobPhase)}
                                         </p>
                                     )}
                                 </div>

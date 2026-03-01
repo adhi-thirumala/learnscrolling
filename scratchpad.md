@@ -151,6 +151,17 @@ we resolves uv sync by takng a version of perth from github which has the correc
 - Lesson: always check for hardcoded generation limits in TTS/LLM libraries. The `# TODO` comment in the source was a dead giveaway.
 - Also cleaned up dead code in `speak()` endpoint: removed unreachable `return Response(content=audio_data, ...)` that referenced undefined `audio_data` variable, and removed hardcoded API key.
 
+### KV-Based Progress Tracking (2026-02-28)
+- Cloudflare Workflow `instance.status()` only returns coarse-grained status (queued/running/complete/errored) — no step-level visibility
+- Solution: KV namespace (`PROGRESS_KV`) for granular progress tracking
+- Main progress key: `progress:{jobId}` — written at each phase transition (parsing, parsed, generating_audio, compositing_video, complete)
+- Per-reel completion keys: `progress:{jobId}:audio:{index}` and `progress:{jobId}:video:{index}` — written by each parallel step independently (avoids race conditions on a single key)
+- Status endpoint reads main key + uses `KV.list({ prefix })` to count per-reel completions
+- All KV keys use `expirationTtl: 86400` (24h auto-cleanup, no manual deletion needed)
+- Frontend polls every 3s (down from 5s) and displays a single status line: "Generating audio... 3/5"
+- KV writes inside `step.do()` are idempotent — safe with Workflow's at-least-once step execution
+- Per-reel keys avoid the concurrent read-modify-write race condition that would happen if parallel steps all updated a single counter in one key
+
 ### torchaudio.save Fails Silently on CloudBucketMount (2026-02-28)
 - `torchaudio.save()` was writing directly to the R2 CloudBucketMount path — this silently failed because WAV format requires seeking back to the header to update the file size after writing audio data.
 - CloudBucketMount (built on mountpoint-s3) does NOT support `seek` — files must be written sequentially in truncate mode. Any `seek` operation fails silently or raises `PermissionError`.

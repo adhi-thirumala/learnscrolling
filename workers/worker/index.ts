@@ -86,7 +86,7 @@ api.post("/api/upload", async (c) => {
   });
 });
 
-// GET /api/status/:id -- job status via Workflow API
+// GET /api/status/:id -- job status via Workflow API + KV progress
 api.get("/api/status/:id", async (c) => {
   const jobId = c.req.param("id");
   const startTime = Date.now();
@@ -102,15 +102,68 @@ api.get("/api/status/:id", async (c) => {
       durationMs: Date.now() - startTime,
     });
 
+    // Read granular progress from KV
+    const progressJson = await c.env.PROGRESS_KV.get(`progress:${jobId}`);
+    const progress = progressJson
+      ? (JSON.parse(progressJson) as {
+          phase: string;
+          totalPages?: number;
+          totalReels?: number;
+          titles?: string[];
+        })
+      : null;
+
+    // Count per-reel completions via KV list (only when relevant)
+    let audioCompleted = 0;
+    let videoCompleted = 0;
+
+    if (progress?.totalReels) {
+      const phase = progress.phase;
+      if (
+        phase === "generating_audio" ||
+        phase === "compositing_video" ||
+        phase === "complete"
+      ) {
+        const audioKeys = await c.env.PROGRESS_KV.list({
+          prefix: `progress:${jobId}:audio:`,
+        });
+        audioCompleted = audioKeys.keys.length;
+      }
+      if (phase === "compositing_video" || phase === "complete") {
+        const videoKeys = await c.env.PROGRESS_KV.list({
+          prefix: `progress:${jobId}:video:`,
+        });
+        videoCompleted = videoKeys.keys.length;
+      }
+    }
+
     // Build response based on workflow status
     const response: {
       jobId: string;
       status: string;
+      progress: {
+        phase: string;
+        totalPages?: number;
+        totalReels?: number;
+        titles?: string[];
+        audioCompleted: number;
+        videoCompleted: number;
+      } | null;
       reels?: { index: number; url: string }[];
       error?: string;
     } = {
       jobId,
       status: instanceStatus.status,
+      progress: progress
+        ? {
+            phase: progress.phase,
+            totalPages: progress.totalPages,
+            totalReels: progress.totalReels,
+            titles: progress.titles,
+            audioCompleted,
+            videoCompleted,
+          }
+        : null,
     };
 
     // When workflow is complete, extract video keys from the output and
@@ -143,6 +196,15 @@ api.get("/api/status/:id", async (c) => {
         error: response.error,
       });
     }
+
+    log("info", "status check: response", {
+      jobId,
+      status: instanceStatus.status,
+      phase: progress?.phase ?? "none",
+      audioCompleted,
+      videoCompleted,
+      durationMs: Date.now() - startTime,
+    });
 
     return c.json(response);
   } catch (err) {
