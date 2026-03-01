@@ -44,6 +44,7 @@ MINECRAFT_VIDEO = (
     "/root/media/Minecraft Parkour Gameplay NO COPYRIGHT (Vertical) [_H2cLn-OlIU].mp4"
 )
 PETER_GRIFFIN_PNG = "/root/media/Peter_Griffin.png"
+STEWIE_GRIFFIN_PNG = "/root/media/latest.png"
 
 
 # --- ASS subtitle generation ---
@@ -180,6 +181,30 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     return header + events
 
 
+def build_speaker_enable_expr(line_time_boundaries: list[dict], speaker: str) -> str:
+    """Build an ffmpeg 'enable' expression that activates during a given speaker's segments.
+
+    Returns an expression like:
+        between(t,0.00,3.50)+between(t,7.20,12.10)
+    which evaluates to >0 (true) when the current time falls within any of
+    that speaker's segments.
+
+    If no boundaries are provided or the speaker has no segments, returns "1"
+    (always on) for Peter and "0" (always off) for Stewie as a safe fallback.
+    """
+    segments = [b for b in line_time_boundaries if b.get("speaker") == speaker]
+    if not segments:
+        return "1" if speaker == "Peter" else "0"
+
+    parts = []
+    for seg in segments:
+        start = f"{seg['start_sec']:.2f}"
+        end = f"{seg['end_sec']:.2f}"
+        parts.append(f"between(t\\,{start}\\,{end})")
+
+    return "+".join(parts)
+
+
 def get_video_duration(video_path: str) -> float:
     """Get video duration in seconds via ffprobe."""
     result = subprocess.run(
@@ -224,9 +249,11 @@ def composite(
     timestamps_key: str,
     duration_seconds: float,
 ):
-    """Composite a reel video: Minecraft background + Peter Griffin overlay + audio + subtitles.
+    """Composite a reel video: Minecraft background + character overlay + audio + subtitles.
 
     Reads audio and timestamps from R2, writes final MP4 back to R2.
+    Switches between Peter Griffin and Stewie Griffin character overlays
+    based on speaker time boundaries in the timestamps JSON.
     Returns dict with videoKey.
     """
     logging.info(
@@ -255,6 +282,7 @@ def composite(
     with open(timestamps_path) as f:
         ts_data = json.load(f)
     word_timestamps = ts_data["wordTimestamps"]
+    line_time_boundaries = ts_data.get("lineTimeBoundaries", [])
 
     logging.info(
         json.dumps(
@@ -263,6 +291,7 @@ def composite(
                 "job_id": job_id,
                 "reel_index": reel_index,
                 "word_count": len(word_timestamps),
+                "has_speaker_boundaries": len(line_time_boundaries) > 0,
             }
         )
     )
@@ -310,10 +339,34 @@ def composite(
         # 5. Run FFmpeg composite
         # Filter graph:
         #   - Scale/crop Minecraft to 1080x1920 (vertical)
-        #   - Scale Peter Griffin PNG to 450px wide
-        #   - Overlay Peter Griffin at bottom-center-left
+        #   - Scale Peter Griffin PNG and Stewie Griffin PNG
+        #   - Overlay each character at bottom-left, toggling visibility
+        #     based on who is speaking (using enable expressions)
         #   - Burn in ASS subtitles
         # Encode with T4 NVENC for GPU-accelerated H.264
+        #
+        # Inputs:
+        #   [0] = Minecraft video
+        #   [1] = Audio WAV
+        #   [2] = Peter Griffin PNG
+        #   [3] = Stewie Griffin PNG
+
+        # Build enable expressions from speaker time boundaries
+        peter_enable = build_speaker_enable_expr(line_time_boundaries, "Peter")
+        stewie_enable = build_speaker_enable_expr(line_time_boundaries, "Stewie")
+
+        # Peter Griffin PNG: scale to 600px wide (original is large)
+        # Stewie Griffin PNG (781x987): scale to 450px wide to be shorter
+        filter_complex = (
+            "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+            "crop=1080:1920[bg];"
+            "[2:v]scale=600:-1[pg];"
+            "[3:v]scale=450:-1[sg];"
+            f"[bg][pg]overlay=x=150:y=H-h-50:enable='{peter_enable}'[v1];"
+            f"[v1][sg]overlay=x=150:y=H-h-50:enable='{stewie_enable}'[v2];"
+            f"[v2]ass={ass_path}[out]"
+        )
+
         ffmpeg_cmd = [
             "ffmpeg",
             "-ss",
@@ -326,14 +379,10 @@ def composite(
             str(audio_path),
             "-i",
             PETER_GRIFFIN_PNG,
+            "-i",
+            STEWIE_GRIFFIN_PNG,
             "-filter_complex",
-            (
-                "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
-                "crop=1080:1920[bg];"
-                "[2:v]scale=600:-1[pg];"
-                "[bg][pg]overlay=x=150:y=H-h-50[v];"
-                f"[v]ass={ass_path}[out]"
-            ),
+            filter_complex,
             "-map",
             "[out]",
             "-map",
@@ -522,7 +571,9 @@ def composite_video(body: dict):
     )
 
     return Response(
-        content=json.dumps({"accepted": True, "job_id": job_id, "reel_index": reel_index}),
+        content=json.dumps(
+            {"accepted": True, "job_id": job_id, "reel_index": reel_index}
+        ),
         media_type="application/json",
     )
 
