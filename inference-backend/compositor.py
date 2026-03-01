@@ -168,8 +168,6 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         text_parts = []
 
         # Add speaker prefix if this is the first line of a new speaker run
-        if has_speakers and line["is_first_of_run"] and line["speaker"]:
-            text_parts.append(f"[{line['speaker']}]:")
 
         for w in line_words:
             duration_cs = max(1, int((w["end"] - w["start"]) * 100))

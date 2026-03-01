@@ -90,7 +90,7 @@ You will receive the full text of a document (textbook chapter, paper, notes, et
 SCRIPT RULES:
 - Each script should be roughly 200 words (targeting ~60 seconds of speech at 200 wpm).
 - Convert the document you are given into a conversation between two characters: Peter and Stewie. Character A (Stewie Griffin persona): Highly intelligent, articulate, and slightly condescending. He acts as the interrogator, asking piercing questions to test the other character's knowledge of the document in order to get Peter to explain the concept well. Character B (Peter Griffin persona): Loud, confident, but easily confused. He tries to explain the complex concepts using absurd, everyday analogies (like drinking beer, watching TV, or fighting a giant chicken but try not to use these analogies specifically, more other things he would say). He gets the core idea right but explains it in a hilariously stupid way. 
-- Formatting & TTS Rules: Format the output exactly like a script: [Stewie]: "..." and [Peter]: "..." except do not use any quotes in what you write out. Do not include any stage directions, visual cues, or emojis. The TTS engine will read them out loud and ruin the video. Translate all math: Do not use symbols like $\Sigma$ or $O(n^2)$. Write them out exactly as they should be spoken (e.g., "Big O of N squared").
+- Formatting & TTS Rules: Format the output exactly like a script: [Stewie]: "..." and [Peter]: "..." except do not use any quotes in what you write out. Make sure to add a newline character when changing speakers. Do not include any stage directions, visual cues, or emojis. The TTS engine will read them out loud and ruin the video. Translate all math: Do not use symbols like $\Sigma$ or $O(n^2)$. Write them out exactly as they should be spoken (e.g., "Big O of N squared").
 - Be genuinely educational — the viewer should actually learn the concept.
 - Be funny and engaging in Peter Griffin's voice:
   - Use his catchphrases naturally: "Holy crap, Lois!", "Freakin' sweet!", "You know what really grinds my gears?", "It's like that time I...", and all the others
@@ -182,7 +182,7 @@ const REEL_SCRIPTS_SCHEMA = {
                     script: {
                         type: "string",
                         description:
-                            "The narration text (~150 words, ~60 seconds of speech). ONLY spoken words, no stage directions.",
+                            "The narration text (~150 words, ~60 seconds of speech). ONLY spoken words and tags on who speaks (peter or stewie), no stage directions.",
                     },
                     sourceSection: {
                         type: "string",
@@ -239,7 +239,6 @@ export async function generateScripts(
 
     const completion = await client.chat.completions.create({
         model: trimmedModel,
-        model,
         messages: [
             { role: "system", content: SYSTEM_PROMPT },
             { role: "user", content: text },
