@@ -268,7 +268,7 @@ def composite(
             (
                 "[0:v]scale=1080:1920:force_original_aspect_ratio=increase,"
                 "crop=1080:1920[bg];"
-                "[2:v]scale=450:-1[pg];"
+                "[2:v]scale=600:-1[pg];"
                 "[bg][pg]overlay=x=150:y=H-h-50[v];"
                 f"[v]ass={ass_path}[out]"
             ),
