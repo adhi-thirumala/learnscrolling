@@ -21,6 +21,9 @@ export interface ParsedPdf {
 
 // --- Helpers ---
 
+/** 24 hours in seconds — progress keys auto-expire after this */
+const PROGRESS_TTL = 86400;
+
 function log(
     level: "info" | "warn" | "error",
     msg: string,
@@ -51,6 +54,13 @@ export class ReelGenerationWorkflow extends WorkflowEntrypoint<
         const { jobId, pdfKey } = event.payload;
 
         log("info", "workflow started", { jobId, pdfKey });
+
+        // Write initial progress
+        await this.env.PROGRESS_KV.put(
+            `progress:${jobId}`,
+            JSON.stringify({ phase: "parsing", updatedAt: new Date().toISOString() }),
+            { expirationTtl: PROGRESS_TTL },
+        );
 
         // Step 1: Fetch PDF from R2 and extract text
         const parsed = await step.do(
@@ -109,6 +119,17 @@ export class ReelGenerationWorkflow extends WorkflowEntrypoint<
                     textLengthBytes,
                 } satisfies ParsedPdf;
             },
+        );
+
+        // Progress: PDF parsed
+        await this.env.PROGRESS_KV.put(
+            `progress:${jobId}`,
+            JSON.stringify({
+                phase: "parsed",
+                totalPages: parsed.totalPages,
+                updatedAt: new Date().toISOString(),
+            }),
+            { expirationTtl: PROGRESS_TTL },
         );
 
         // Step 2: Cleanup PDF from R2 (best-effort, after parse output is persisted)
@@ -204,6 +225,19 @@ export class ReelGenerationWorkflow extends WorkflowEntrypoint<
             },
         );
 
+        // Progress: scripts generated, about to start audio
+        await this.env.PROGRESS_KV.put(
+            `progress:${jobId}`,
+            JSON.stringify({
+                phase: "generating_audio",
+                totalPages: parsed.totalPages,
+                totalReels: scripts.length,
+                titles: scripts.map((s: ReelScript) => s.title),
+                updatedAt: new Date().toISOString(),
+            }),
+            { expirationTtl: PROGRESS_TTL },
+        );
+
         // Step 4: Generate audio + timestamps for each reel (parallel via Modal TTS)
         const audioResults = await Promise.all(
             scripts.map((script: ReelScript, index: number) =>
@@ -265,10 +299,33 @@ export class ReelGenerationWorkflow extends WorkflowEntrypoint<
                             timestampsKey: result.timestampsKey,
                         });
 
+                        // Progress: mark this reel's audio as done
+                        await this.env.PROGRESS_KV.put(
+                            `progress:${jobId}:audio:${index}`,
+                            JSON.stringify({
+                                durationSeconds: result.durationSeconds,
+                                completedAt: new Date().toISOString(),
+                            }),
+                            { expirationTtl: PROGRESS_TTL },
+                        );
+
                         return result;
                     },
                 ),
             ),
+        );
+
+        // Progress: audio done, about to start video compositing
+        await this.env.PROGRESS_KV.put(
+            `progress:${jobId}`,
+            JSON.stringify({
+                phase: "compositing_video",
+                totalPages: parsed.totalPages,
+                totalReels: scripts.length,
+                titles: scripts.map((s: ReelScript) => s.title),
+                updatedAt: new Date().toISOString(),
+            }),
+            { expirationTtl: PROGRESS_TTL },
         );
 
         // Step 5: Composite video for each reel (parallel via Modal compositor)
@@ -340,6 +397,13 @@ export class ReelGenerationWorkflow extends WorkflowEntrypoint<
                             videoKey: result.videoKey,
                         });
 
+                        // Progress: mark this reel's video as done
+                        await this.env.PROGRESS_KV.put(
+                            `progress:${jobId}:video:${index}`,
+                            JSON.stringify({ completedAt: new Date().toISOString() }),
+                            { expirationTtl: PROGRESS_TTL },
+                        );
+
                         return result;
                     },
                 ),
@@ -377,6 +441,19 @@ export class ReelGenerationWorkflow extends WorkflowEntrypoint<
                     });
                 }
             },
+        );
+
+        // Progress: workflow complete
+        await this.env.PROGRESS_KV.put(
+            `progress:${jobId}`,
+            JSON.stringify({
+                phase: "complete",
+                totalPages: parsed.totalPages,
+                totalReels: scripts.length,
+                titles: scripts.map((s: ReelScript) => s.title),
+                updatedAt: new Date().toISOString(),
+            }),
+            { expirationTtl: PROGRESS_TTL },
         );
 
         log("info", "workflow complete", {

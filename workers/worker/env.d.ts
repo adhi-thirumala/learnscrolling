@@ -7,5 +7,6 @@ declare namespace Cloudflare {
     TTS_API_KEY: string;
     VIDEO_COMPOSITOR_URL: string;
     VIDEO_COMPOSITOR_API_KEY: string;
+    PROGRESS_KV: KVNamespace;
   }
 }

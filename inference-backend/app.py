@@ -100,7 +100,7 @@ class PeterGriffinTTS:
         # The model will be downloaded to the volume on the first run
         # and reused from the volume on subsequent container starts
         self.model = ChatterboxTTS.from_pretrained(device="cuda")
-        self.whisper_model = whisper.load_model("base", device="cuda")
+        self.whisper_model = whisper.load_model("large", device="cuda")
         self.audio_prompt_path = "/root/petergriffin/literally just peter griffin talking for 8 minutes with almost no background noise.mp3"
 
     @modal.method()

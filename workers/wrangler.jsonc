@@ -12,6 +12,12 @@
   "observability": {
     "enabled": true
   },
+  "kv_namespaces": [
+    {
+      "binding": "PROGRESS_KV",
+      "id": "1c957994e36441c681acdf24852cf809"
+    }
+  ],
   "r2_buckets": [
     {
       "binding": "BUCKET",
