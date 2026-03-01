@@ -7,33 +7,22 @@ import random
 import tempfile
 from pathlib import Path
 
-# --- Image: NVIDIA CUDA runtime + static FFmpeg with NVENC + libass for subtitles ---
+# --- Image: Debian + system FFmpeg (NVENC via Modal's injected NVIDIA drivers) + libass ---
 
 compositor_image = (
-    modal.Image.from_registry(
-        "nvidia/cuda:12.6.0-runtime-ubuntu24.04",
-        add_python="3.11",
-    )
+    modal.Image.debian_slim(python_version="3.11")
     .apt_install(
-        "wget",
-        "xz-utils",
+        # FFmpeg from Debian repos — built with NVENC support, uses Modal's runtime NVIDIA drivers
+        "ffmpeg",
         # libass for ASS subtitle rendering in FFmpeg filter graph
         "libass9",
         "libass-dev",
         # fonts for subtitle text
         "fontconfig",
         "fonts-dejavu-core",
+        "git",
     )
-    .run_commands(
-        # Download BtbN static FFmpeg build with NVENC support (GPL, includes all codecs)
-        "wget -q https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz",
-        "tar -xf ffmpeg-master-latest-linux64-gpl.tar.xz",
-        "mv ffmpeg-master-latest-linux64-gpl/bin/ffmpeg /usr/local/bin/ffmpeg",
-        "mv ffmpeg-master-latest-linux64-gpl/bin/ffprobe /usr/local/bin/ffprobe",
-        "rm -rf ffmpeg-master-latest-linux64-gpl*",
-        # Verify NVENC encoder is available in the binary
-        "ffmpeg -encoders 2>/dev/null | grep h264_nvenc",
-    )
+    .uv_sync()
     # Bake media assets (Minecraft parkour MP4, Peter Griffin PNG) into the image
     .add_local_dir("./petergriffin", remote_path="/root/media")
 )
@@ -154,7 +143,7 @@ def get_video_duration(video_path: str) -> float:
 
 @app.function(
     image=compositor_image,
-    gpu="H100",
+    gpu="T4",
     scaledown_window=300,
     volumes={
         R2_MOUNT_PATH: modal.CloudBucketMount(
@@ -262,7 +251,7 @@ def composite(
         #   - Scale Peter Griffin PNG to 300px wide
         #   - Overlay Peter Griffin at bottom-left
         #   - Burn in ASS subtitles
-        # Encode with H100 NVENC for GPU-accelerated H.264
+        # Encode with T4 NVENC for GPU-accelerated H.264
         ffmpeg_cmd = [
             "ffmpeg",
             "-ss",
@@ -352,10 +341,11 @@ def composite(
         video_dest.parent.mkdir(parents=True, exist_ok=True)
 
         # CloudBucketMount requires write in truncate mode (no append)
-        # shutil.copy opens in truncate mode by default
+        # Use shutil.copy (not copy2) — copy2 calls copystat which tries to
+        # set utime on the destination, and CloudBucketMount doesn't support that.
         import shutil
 
-        shutil.copy2(output_path, str(video_dest))
+        shutil.copy(output_path, str(video_dest))
 
     output_size = video_dest.stat().st_size
 

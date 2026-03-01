@@ -1,6 +1,6 @@
 import modal
-import io
 import os
+import re
 
 # Define the image with necessary dependencies
 chatterbox_image = (
@@ -22,6 +22,52 @@ r2_secret = modal.Secret.from_name(
     "cf-access-key", required_keys=["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
 )
 R2_MOUNT_PATH = "/root/r2"
+
+# --- Text chunking ---
+# Chatterbox hardcodes max_new_tokens=1000 (~34 seconds of audio).
+# To generate longer audio, we split the script into sentence-level chunks,
+# generate audio for each chunk separately, then concatenate.
+MAX_WORDS_PER_CHUNK = 50  # ~17 seconds of speech — well within the 1000-token limit
+
+
+def split_into_chunks(text: str, max_words: int = MAX_WORDS_PER_CHUNK) -> list[str]:
+    """Split text into chunks at sentence boundaries, each ≤ max_words words.
+
+    Strategy:
+    1. Split text into sentences (on . ! ?)
+    2. Greedily pack sentences into chunks up to max_words
+    3. If a single sentence exceeds max_words, include it as its own chunk
+       (Chatterbox will still handle it — it just gets closer to the token limit)
+    """
+    # Split on sentence-ending punctuation, keeping the punctuation attached
+    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    sentences = [s.strip() for s in sentences if s.strip()]
+
+    if not sentences:
+        return [text]
+
+    chunks = []
+    current_chunk: list[str] = []
+    current_word_count = 0
+
+    for sentence in sentences:
+        sentence_words = len(sentence.split())
+
+        if current_word_count + sentence_words <= max_words:
+            current_chunk.append(sentence)
+            current_word_count += sentence_words
+        else:
+            # Flush current chunk if non-empty
+            if current_chunk:
+                chunks.append(" ".join(current_chunk))
+            current_chunk = [sentence]
+            current_word_count = sentence_words
+
+    # Flush remaining
+    if current_chunk:
+        chunks.append(" ".join(current_chunk))
+
+    return chunks
 
 
 @app.cls(
@@ -63,6 +109,7 @@ class PeterGriffinTTS:
         import logging
         import subprocess
         import tempfile
+        import torch
         import torchaudio
         from pathlib import Path
 
@@ -77,22 +124,82 @@ class PeterGriffinTTS:
             )
         )
 
-        # Generate the audio using Peter Griffin's voice as the prompt
-        wav = self.model.generate(
-            text, audio_prompt_path=self.audio_prompt_path, exaggeration=0.7
+        # --- 1. Split text into chunks to work around Chatterbox's 1000-token (~34s) limit ---
+        chunks = split_into_chunks(text)
+
+        logging.info(
+            json.dumps(
+                {
+                    "event": "text_chunked",
+                    "job_id": job_id,
+                    "reel_index": reel_index,
+                    "num_chunks": len(chunks),
+                    "chunk_word_counts": [len(c.split()) for c in chunks],
+                }
+            )
         )
 
-        wav = wav.cpu()
+        # --- 2. Generate audio for each chunk separately ---
+        chunk_wavs = []
+        for i, chunk_text in enumerate(chunks):
+            logging.info(
+                json.dumps(
+                    {
+                        "event": "chunk_generate_start",
+                        "job_id": job_id,
+                        "reel_index": reel_index,
+                        "chunk_index": i,
+                        "chunk_words": len(chunk_text.split()),
+                    }
+                )
+            )
 
-        if wav.dim() == 1:
-            wav = wav.unsqueeze(0)
+            wav = self.model.generate(
+                chunk_text,
+                audio_prompt_path=self.audio_prompt_path,
+                exaggeration=0.7,
+            )
+            wav = wav.cpu()
+            if wav.dim() == 1:
+                wav = wav.unsqueeze(0)
+            chunk_wavs.append(wav)
 
-        # Speed up 1.5x without pitch shift using ffmpeg (sox_effects removed in torchaudio 2.1+)
+            logging.info(
+                json.dumps(
+                    {
+                        "event": "chunk_generate_done",
+                        "job_id": job_id,
+                        "reel_index": reel_index,
+                        "chunk_index": i,
+                        "chunk_duration_seconds": round(
+                            wav.shape[1] / self.model.sr, 2
+                        ),
+                    }
+                )
+            )
+
+        # --- 3. Concatenate all chunk WAVs ---
+        full_wav = torch.cat(chunk_wavs, dim=1)
+
+        logging.info(
+            json.dumps(
+                {
+                    "event": "chunks_concatenated",
+                    "job_id": job_id,
+                    "reel_index": reel_index,
+                    "total_raw_duration_seconds": round(
+                        full_wav.shape[1] / self.model.sr, 2
+                    ),
+                }
+            )
+        )
+
+        # --- 4. Speed up 1.15x without pitch shift using ffmpeg ---
         with (
             tempfile.NamedTemporaryFile(suffix=".wav") as tmp_in,
             tempfile.NamedTemporaryFile(suffix=".wav") as tmp_out,
         ):
-            torchaudio.save(tmp_in.name, wav, self.model.sr, format="wav")
+            torchaudio.save(tmp_in.name, full_wav, self.model.sr, format="wav")
             result = subprocess.run(
                 [
                     "ffmpeg",
@@ -120,11 +227,11 @@ class PeterGriffinTTS:
                     f"ffmpeg tempo adjustment failed: {result.stderr.decode()}"
                 )
 
+            # --- 5. Run Whisper on the full sped-up audio for word timestamps ---
             result = self.whisper_model.transcribe(
                 tmp_out.name, word_timestamps=True, language="en"
             )
 
-            buffer = io.BytesIO()
             wav_sped, new_sr = torchaudio.load(tmp_out.name)
             words = []
             for segment in result["segments"]:
@@ -138,12 +245,14 @@ class PeterGriffinTTS:
                     )
 
             duration = wav_sped.shape[1] / new_sr
+
+            # --- 6. Write final WAV to R2 ---
             audio_key = f"audio/{job_id}/{reel_index}.wav"
             audio_path = Path(R2_MOUNT_PATH) / audio_key
             audio_path.parent.mkdir(parents=True, exist_ok=True)
             torchaudio.save(str(audio_path), wav_sped, int(new_sr), format="wav")
 
-            # 7. Write timestamps JSON to R2
+            # --- 7. Write timestamps JSON to R2 ---
             timestamps_key = f"timestamps/{job_id}/{reel_index}.json"
             timestamps_path = Path(R2_MOUNT_PATH) / timestamps_key
             timestamps_path.parent.mkdir(parents=True, exist_ok=True)
@@ -164,6 +273,7 @@ class PeterGriffinTTS:
                         "reel_index": reel_index,
                         "duration_seconds": round(duration, 2),
                         "word_count": len(words),
+                        "num_chunks": len(chunks),
                         "audio_key": audio_key,
                         "timestamps_key": timestamps_key,
                     }
@@ -177,16 +287,10 @@ class PeterGriffinTTS:
                 "wordCount": len(words),
             }
 
-        logging.info(
-            json.dumps({"event": "generate_complete", "audio_bytes": buffer.tell()})
-        )
-        return buffer.getvalue()
-
 
 @app.function(image=chatterbox_image)
 @modal.fastapi_endpoint(method="POST")
 def speak(body: dict):
-    api_key = "d736adf4b03b0519393e6d5cbedc73bb81539edb2771d856bff265e59e44f559"
     import json
     import logging
     from fastapi import Response
@@ -246,10 +350,6 @@ def speak(body: dict):
         )
     )
 
-    logging.info(
-        json.dumps({"event": "speak_response", "audio_bytes": len(audio_data)})
-    )
-    return Response(content=audio_data, media_type="audio/wav")
     return Response(
         content=json.dumps(
             {

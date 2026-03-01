@@ -121,3 +121,32 @@ we resolves uv sync by takng a version of perth from github which has the correc
 - TODO: verify `ffmpeg -encoders | grep nvenc` actually works at runtime on Modal H100 (it's verified at image build time but driver libs are injected at runtime)
 - TODO: the `libass` ASS filter in BtbN static FFmpeg may need the system `libass.so` — that's why we `apt_install("libass9", "libass-dev")`
 - TODO: if Minecraft source video isn't H.264, keyframe-based seek (`-ss` before `-i`) may be slow. Verify with ffprobe.
+
+### Compositor GPU Downgrade: H100 -> T4 (2026-02-28)
+- `h264_nvenc` failed with `OpenEncodeSessionEx failed: unsupported device` on H100
+- The NVENC encoder is present in the static FFmpeg binary but the H100's driver/NVENC session couldn't be opened (possible Modal driver injection issue, or H100 NVENC availability issue)
+- H100 was overkill for video encoding anyway — NVENC is the same speed on any GPU that supports it
+- Switched to T4 (Turing, SM75) — cheapest GPU on Modal with NVENC support, ~$0.07/hr vs ~$3.95/hr for H100
+- T4 supports the newer `p1`-`p7` preset naming scheme (Turing+), so `-preset p4` still works
+- The compositor doesn't do any ML inference — it only needs NVENC for H.264 encoding. T4 is ideal.
+- If T4 also has NVENC issues, the fallback would be `libx264` on CPU (no GPU needed at all)
+
+### Compositor NVENC Fix: Use System FFmpeg Instead of Static Build (2026-02-28)
+- T4 also failed with `OpenEncodeSessionEx failed: unsupported device` — same error as H100
+- Root cause: the BtbN static FFmpeg binary bundles NVENC *code* but dynamically links against `libnvidia-encode.so` at runtime. Modal injects NVIDIA drivers at runtime, but the static binary couldn't find/use them.
+- Fix: replaced the BtbN static FFmpeg download with `apt_install("ffmpeg")`. The Debian-packaged FFmpeg is built with NVENC support and correctly links against the system NVIDIA libraries that Modal injects.
+- Removed `wget`, `xz-utils` from apt_install (only needed for the static build download)
+- Removed the `run_commands()` block that downloaded/extracted the static build
+- Lesson: on Modal GPU machines, prefer system-packaged FFmpeg over static builds. Modal injects NVIDIA driver libs at runtime, and system FFmpeg knows how to find them. Static builds may not.
+
+### Chatterbox 34-Second Audio Cutoff (2026-02-28)
+- **Root cause**: Chatterbox hardcodes `max_new_tokens=1000` in `tts.py:227` when calling `self.t3.inference()`. This caps audio generation at ~1000 speech tokens ≈ 34 seconds.
+- The `generate()` method does NOT expose `max_new_tokens` as a parameter — it's buried inside the method body.
+- Both original Chatterbox and Chatterbox-Turbo have the same limit: `max_new_tokens=1000` / `max_gen_len=1000` in `t3.py`'s `inference()` and `inference_turbo()` methods respectively.
+- The T3 model's `inference()` method DOES accept `max_new_tokens` as an optional parameter (defaults to `self.hp.max_speech_tokens`), but `tts.py` hardcodes it to 1000 with a `# TODO: use the value in config` comment.
+- **Symptoms**: Audio cuts off mid-sentence at exactly ~34 seconds. All words from the input script are present in the generated speech, it just stops abruptly.
+- **Fix**: Sentence-level chunking. Split input text into ~50-word chunks at sentence boundaries, generate audio for each chunk separately, then `torch.cat()` the WAV tensors before speed adjustment and Whisper alignment.
+- **Why not monkey-patch**: Raising `max_new_tokens` to 2000+ might work but risks quality degradation — the model may not have been trained on sequences that long, and autoregressive quality tends to degrade with length.
+- **Why not switch models**: Considered Chatterbox-Turbo, but it has the same 1000-token limit. Other models (F5-TTS, XTTS-v2) would require significant integration work.
+- Lesson: always check for hardcoded generation limits in TTS/LLM libraries. The `# TODO` comment in the source was a dead giveaway.
+- Also cleaned up dead code in `speak()` endpoint: removed unreachable `return Response(content=audio_data, ...)` that referenced undefined `audio_data` variable, and removed hardcoded API key.
