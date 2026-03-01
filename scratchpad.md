@@ -159,3 +159,12 @@ we resolves uv sync by takng a version of perth from github which has the correc
 - The `W301 stream_writer.cpp Failed to write trailer` warning was a red herring — it's a PyTorch/gRPC internal warning unrelated to the R2 write failure.
 - Lesson: NEVER use `torchaudio.save()`, `np.savez()`, or any library that does file seeking directly on a CloudBucketMount path. Always write to temp first, then copy.
 - Lesson: the compositor already had this pattern right — should have checked for consistency across both apps.
+
+### Temp File Cleanup in Workflow (2026-02-28)
+- Added Step 6 (`cleanup-intermediates`) to `workflow.ts` after video compositing completes
+- Deletes `audio/{jobId}/{reelIndex}.wav` and `timestamps/{jobId}/{reelIndex}.json` from R2 for all reels
+- Uses `BUCKET.delete(keysToDelete)` with an array of keys — R2 supports batch delete in a single call
+- Best-effort: wrapped in try/catch so a cleanup failure doesn't fail the workflow. Logs a warning instead.
+- Retry config: 3 retries, 5s delay, 30s timeout — same as existing `cleanup-pdf` step
+- Only runs after all compositing steps succeed (it's after the `videoResults` Promise.all)
+- The final output files (`reels/{jobId}/{reelIndex}.mp4`) are NOT deleted — only intermediate audio/timestamps
