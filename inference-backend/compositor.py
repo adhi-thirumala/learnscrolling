@@ -40,9 +40,7 @@ r2_secret = modal.Secret.from_name(
 R2_MOUNT_PATH = "/root/r2"
 
 # Media assets are baked into the image at /root/media via add_local_dir
-MINECRAFT_VIDEO = (
-    "/root/media/Minecraft Parkour Gameplay NO COPYRIGHT (Vertical) [_H2cLn-OlIU].mp4"
-)
+MINECRAFT_VIDEO = "/root/media/minecraft.mp4"
 PETER_GRIFFIN_PNG = "/root/media/Peter_Griffin.png"
 STEWIE_GRIFFIN_PNG = "/root/media/latest.png"
 

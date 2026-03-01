@@ -88,7 +88,7 @@ class PeterGriffinTTS:
         import whisper
 
         # Voice reference paths — keyed by speaker name
-        self.peter_path = "/root/petergriffin/literally just peter griffin talking for 8 minutes with almost no background noise.mp3"
+        self.peter_path = "/root/petergriffin/peter.wav"
         self.stewie_path = "/root/petergriffin/stewie.wav"
 
         self.voice_paths = {
@@ -421,7 +421,9 @@ def speak(body: dict):
     )
 
     return Response(
-        content=json.dumps({"accepted": True, "job_id": job_id, "reel_index": reel_index}),
+        content=json.dumps(
+            {"accepted": True, "job_id": job_id, "reel_index": reel_index}
+        ),
         media_type="application/json",
     )
 
