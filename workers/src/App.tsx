@@ -569,7 +569,8 @@ export default function App() {
             <footer className="border-t border-border-subtle px-6 py-4 text-center text-xs text-neutral-600 space-y-1">
                 <p>ML inference and reel generation powered by Modal &middot; Hosted on Cloudflare Workers</p>
                 <p><sup>1</sup> Family Guy and all related characters are property of 20th Television. Minecraft is a trademark of Mojang Studios / Microsoft. LearnScrolling is not affiliated with or endorsed by any of these entities.</p>
+                <p>This project is licensed under the Affero GNU Public License v3.0. You can find its source at <a href="https://github.com/adhi-thirumala/learnscrolling"><u>github.com/adhi-thirumala/learnscrolling</u></a>.</p>
             </footer>
-        </div>
+        </div >
     );
 }
