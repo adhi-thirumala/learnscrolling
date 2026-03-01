@@ -1,5 +1,4 @@
 cleaner frontend
-clean up temp generated file (audio, timestamps)
 scrolling on frontend
 make video better generated and look better
 maybe make things faster

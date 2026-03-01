@@ -301,12 +301,26 @@ class PeterGriffinTTS:
             }
 
 
-@app.function(image=chatterbox_image)
+@app.function(
+    image=chatterbox_image,
+    secrets=[modal.Secret.from_name("tts-api-key")],
+)
 @modal.fastapi_endpoint(method="POST")
 def speak(body: dict):
     import json
     import logging
     from fastapi import Response
+
+    # --- Auth ---
+    expected_key = os.environ.get("TTS_API_KEY", "")
+    provided_key = body.get("api_key", "")
+    if not expected_key or provided_key != expected_key:
+        logging.warning(json.dumps({"event": "tts_auth_failed"}))
+        return Response(
+            content=json.dumps({"error": "unauthorized"}),
+            media_type="application/json",
+            status_code=401,
+        )
 
     text = body.get("text", "")
     job_id = body.get("job_id", "")

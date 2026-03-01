@@ -160,6 +160,12 @@ we resolves uv sync by takng a version of perth from github which has the correc
 - Lesson: NEVER use `torchaudio.save()`, `np.savez()`, or any library that does file seeking directly on a CloudBucketMount path. Always write to temp first, then copy.
 - Lesson: the compositor already had this pattern right — should have checked for consistency across both apps.
 
+### TTS API Key Auth Added (2026-02-28)
+- The `speak()` endpoint in `app.py` was completely unauthenticated — the Worker sent `api_key` in the body but the endpoint never checked it
+- Added `secrets=[modal.Secret.from_name("tts-api-key")]` to the `@app.function` decorator so `TTS_API_KEY` is available as an env var
+- Added auth check block (read env var, compare to `body.get("api_key")`, return 401 on mismatch) — identical pattern to compositor's auth in `compositor.py:382-391`
+- Both endpoints now use the same structure: Modal Secret on decorator -> `os.environ.get()` -> compare -> 401
+
 ### Temp File Cleanup in Workflow (2026-02-28)
 - Added Step 6 (`cleanup-intermediates`) to `workflow.ts` after video compositing completes
 - Deletes `audio/{jobId}/{reelIndex}.wav` and `timestamps/{jobId}/{reelIndex}.json` from R2 for all reels
