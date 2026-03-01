@@ -150,3 +150,12 @@ we resolves uv sync by takng a version of perth from github which has the correc
 - **Why not switch models**: Considered Chatterbox-Turbo, but it has the same 1000-token limit. Other models (F5-TTS, XTTS-v2) would require significant integration work.
 - Lesson: always check for hardcoded generation limits in TTS/LLM libraries. The `# TODO` comment in the source was a dead giveaway.
 - Also cleaned up dead code in `speak()` endpoint: removed unreachable `return Response(content=audio_data, ...)` that referenced undefined `audio_data` variable, and removed hardcoded API key.
+
+### torchaudio.save Fails Silently on CloudBucketMount (2026-02-28)
+- `torchaudio.save()` was writing directly to the R2 CloudBucketMount path — this silently failed because WAV format requires seeking back to the header to update the file size after writing audio data.
+- CloudBucketMount (built on mountpoint-s3) does NOT support `seek` — files must be written sequentially in truncate mode. Any `seek` operation fails silently or raises `PermissionError`.
+- The timestamps JSON file (written via `open()` + `json.dump()`) may have worked because JSON is written sequentially with no seeking, but WAV files inherently require a seek.
+- Fix: write to a local temp file first, then `shutil.copy()` to the mount path. Same pattern the compositor already uses correctly (compositor.py line 344-348).
+- The `W301 stream_writer.cpp Failed to write trailer` warning was a red herring — it's a PyTorch/gRPC internal warning unrelated to the R2 write failure.
+- Lesson: NEVER use `torchaudio.save()`, `np.savez()`, or any library that does file seeking directly on a CloudBucketMount path. Always write to temp first, then copy.
+- Lesson: the compositor already had this pattern right — should have checked for consistency across both apps.

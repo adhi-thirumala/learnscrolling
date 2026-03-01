@@ -19,7 +19,7 @@ CACHE_DIR = "/root/cache"
 cf_account_id = "b8a6047310bbd4b0a0e5374e91089308"
 
 r2_secret = modal.Secret.from_name(
-    "cf-access-key", required_keys=["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
+    "r2-secret", required_keys=["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"]
 )
 R2_MOUNT_PATH = "/root/r2"
 
@@ -40,7 +40,7 @@ def split_into_chunks(text: str, max_words: int = MAX_WORDS_PER_CHUNK) -> list[s
        (Chatterbox will still handle it — it just gets closer to the token limit)
     """
     # Split on sentence-ending punctuation, keeping the punctuation attached
-    sentences = re.split(r'(?<=[.!?])\s+', text.strip())
+    sentences = re.split(r"(?<=[.!?])\s+", text.strip())
     sentences = [s.strip() for s in sentences if s.strip()]
 
     if not sentences:
@@ -107,6 +107,7 @@ class PeterGriffinTTS:
     def generate_with_timestamps(self, text: str, job_id: str, reel_index: int):
         import json
         import logging
+        import shutil
         import subprocess
         import tempfile
         import torch
@@ -247,23 +248,35 @@ class PeterGriffinTTS:
             duration = wav_sped.shape[1] / new_sr
 
             # --- 6. Write final WAV to R2 ---
+            # CloudBucketMount (mountpoint-s3) does not support seek — torchaudio.save
+            # writes WAV headers then seeks back to update the size field, which fails
+            # silently. Write to a local temp file first, then copy to R2.
             audio_key = f"audio/{job_id}/{reel_index}.wav"
-            audio_path = Path(R2_MOUNT_PATH) / audio_key
-            audio_path.parent.mkdir(parents=True, exist_ok=True)
-            torchaudio.save(str(audio_path), wav_sped, int(new_sr), format="wav")
+            audio_dest = Path(R2_MOUNT_PATH) / audio_key
+            audio_dest.parent.mkdir(parents=True, exist_ok=True)
+
+            with tempfile.NamedTemporaryFile(suffix=".wav") as tmp_audio:
+                torchaudio.save(tmp_audio.name, wav_sped, int(new_sr), format="wav")
+                shutil.copy(tmp_audio.name, str(audio_dest))
 
             # --- 7. Write timestamps JSON to R2 ---
             timestamps_key = f"timestamps/{job_id}/{reel_index}.json"
-            timestamps_path = Path(R2_MOUNT_PATH) / timestamps_key
-            timestamps_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(timestamps_path, "w") as f:
+            timestamps_dest = Path(R2_MOUNT_PATH) / timestamps_key
+            timestamps_dest.parent.mkdir(parents=True, exist_ok=True)
+
+            with tempfile.NamedTemporaryFile(
+                mode="w", suffix=".json", delete=False
+            ) as tmp_ts:
                 json.dump(
                     {
                         "wordTimestamps": words,
                         "durationSeconds": round(duration, 2),
                     },
-                    f,
+                    tmp_ts,
                 )
+                tmp_ts_name = tmp_ts.name
+            shutil.copy(tmp_ts_name, str(timestamps_dest))
+            os.unlink(tmp_ts_name)
 
             logging.info(
                 json.dumps(
