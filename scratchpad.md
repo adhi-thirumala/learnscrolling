@@ -207,3 +207,15 @@ we resolves uv sync by takng a version of perth from github which has the correc
 - Retry config: 3 retries, 5s delay, 30s timeout — same as existing `cleanup-pdf` step
 - Only runs after all compositing steps succeed (it's after the `videoResults` Promise.all)
 - The final output files (`reels/{jobId}/{reelIndex}.mp4`) are NOT deleted — only intermediate audio/timestamps
+
+### ReelFeed Controls Refactor (2026-02-28)
+- Changed video click behavior from mute toggle to play/pause toggle
+- Added semi-transparent play icon overlay (64px triangle) when a video is paused
+- Added mute button (speaker icon) and fullscreen button (expand icon) as sticky top-right controls
+- Buttons use `sticky top-0` inside the scroll container so they float above the reels regardless of scroll position
+- `pointer-events-none` on the sticky wrapper + `pointer-events-auto` on the button container allows clicks to pass through to the video underneath
+- Fullscreen uses the Fullscreen API on the container div — listens for `fullscreenchange` event to sync state (handles Escape key exit)
+- Container height switches from `h-[80vh]` to `h-screen` when fullscreen
+- `scrollToIndex` offset adjusted by +1 because the sticky control bar is now `children[0]` of the scroll container
+- Paused state is cleared when IntersectionObserver auto-plays a new reel (prevents stale play icon overlay on navigated-to reels)
+- All icons are inline SVGs (no icon library dependency) using Feather-style geometry
